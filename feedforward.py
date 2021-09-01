@@ -33,16 +33,17 @@ class FeedForward(torch.nn.Module):
     """
     def __init__(self, structure, dropout=0, activation=torch.nn.ReLU(), transform=None, device=None):
         super().__init__()
+        self.device = device
         
         def layers():
             the_structure = list(structure)
             assert len(the_structure) >= 2
             for a, b in pairs(the_structure[:-1]):
-                yield initialized_linear(a, b)
+                yield initialized_linear(a, b, device=self.device)
                 yield torch.nn.Dropout(dropout)
                 yield activation
             *_, penultimate, last = the_structure
-            yield initialized_linear(penultimate, last)
+            yield initialized_linear(penultimate, last, device=self.device)
 
         self.ff = torch.nn.Sequential(*layers())
         self.transform = identity if transform is None else transform

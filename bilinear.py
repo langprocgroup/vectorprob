@@ -32,6 +32,8 @@ ACTIVATIONS = {
     'relu': torch.nn.ReLU(),
 }
 
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 def identity(x):
     return x
 
@@ -79,7 +81,7 @@ class BackoffSmoothing:
         return rfutils.mean(gen())
 
 class MarginalLogLinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=None):
+    def __init__(self, w_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
         if not w_encoder_structure:
             self.w_encoder = identity
@@ -91,23 +93,24 @@ class MarginalLogLinear(torch.nn.Module):
         self.vectors_dict = vectors_dict
         if support is None:
             self.support = set(self.vectors_dict.keys()) # includes UNK
-            self.support_vectors = torch.Tensor(list(self.vectors_dict.values()))
+            self.support_vectors = torch.Tensor(list(self.vectors_dict.values())).to(device)
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict])
+            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict]).to(device)
+        self.device = device
 
     def forward(self, words):
         """ Batch has shape B x 1 x K or B x K
         This function computes < weights | w_i > - \log \sum_w \exp < weights | w > 
         """
-        batch = embed_groups(self.vectors_dict, words, vocab=self.support)
+        batch = embed_groups(self.vectors_dict, words, vocab=self.support, device=self.device)
         batch = batch.squeeze(-2) # shape B x K
         energy = self.linear(self.w_encoder(batch)).squeeze(-1) # shape B
         logZ = self.linear(self.w_encoder(self.support_vectors)).squeeze(-1).logsumexp(-1) # shape 1, same across batch
         return logZ - energy
 
 class ConditionalLogLinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, c_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=None):
+    def __init__(self, w_encoder_structure, c_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
         if not w_encoder_structure:
             self.w_encoder = identity
@@ -131,18 +134,19 @@ class ConditionalLogLinear(torch.nn.Module):
                 device=device
             )
             c_E = c_encoder_structure[-1]
-        self.linear = torch.nn.Bilinear(w_E + c_E, 1, device=device)
+        self.linear = torch.nn.Linear(w_E + c_E, 1, device=device)
         self.vectors_dict = vectors_dict
         if support is None:
             self.support = set(self.vectors_dict.keys()) # includes UNK
-            self.support_vectors = torch.Tensor(list(self.vectors_dict.values()))
+            self.support_vectors = torch.Tensor(list(self.vectors_dict.values())).to(device)
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict])
+            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict]).to(device)
+        self.device = device
             
 
     def forward(self, pairs):
-        v_w, v_c = embed_groups(self.vectors_dict, pairs, vocab=self.support).transpose(0, 1)
+        v_w, v_c = embed_groups(self.vectors_dict, pairs, vocab=self.support, device=self.device).transpose(0, 1)
         h_w = self.w_encoder(v_w) # shape B x K
         h_c = self.c_encoder(v_c) # shape B x L
         h_wc = torch.cat([h_w, h_c], dim=-1) # shape B x (K + L)
@@ -155,7 +159,7 @@ class ConditionalLogLinear(torch.nn.Module):
         
         
 class ConditionalSoftmax(torch.nn.Module):
-    def __init__(self, c_encoder_structure, vectors_dict, support, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=None):
+    def __init__(self, c_encoder_structure, vectors_dict, support, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
         V = len(support)
         w_E = len(rfutils.first(vectors_dict.values()))
@@ -179,22 +183,23 @@ class ConditionalSoftmax(torch.nn.Module):
         self.vectors_dict = vectors_dict
         if support is None:
             self.support = set(self.vectors_dict.keys()) # includes UNK
-            self.support_vectors = torch.Tensor(list(self.vectors_dict.values()))
+            self.support_vectors = torch.Tensor(list(self.vectors_dict.values())).to(device)
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict])
+            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict]).to(device)
         self.support_indices = {w:i for i, w in enumerate(self.support)}
+        self.device = device
 
     def forward(self, pairs):
         ws, cs = zip(*pairs)
-        c_vectors = embed_groups(self.vectors_dict, [(c,) for c in cs]).squeeze(-2) # shape B x K
+        c_vectors = embed_groups(self.vectors_dict, [(c,) for c in cs], device=self.device).squeeze(-2) # shape B x K
         outputs = self.net(c_vectors) # shape B x V
         w_indices = torch.LongTensor([[self.support_indices[w] if w in self.support_indices else self.support_indices[UNK] for w in ws]])
         logprobs = torch.gather(outputs, -1, w_indices).squeeze(-2) # shape B
         return -logprobs
 
 class ConditionalLogBilinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, c_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=None):
+    def __init__(self, w_encoder_structure, c_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
         if w_encoder_structure is None:
             self.w_encoder = identity
@@ -220,33 +225,33 @@ class ConditionalLogBilinear(torch.nn.Module):
             c_E = c_encoder_structure[-1]
         self.bilinear = torch.nn.Bilinear(w_E, c_E, 1, bias=False, device=device)
         self.w_linear = torch.nn.Linear(w_E, 1, bias=False, device=device)
-        self.c_linear = torch.nn.Linear(c_E, 1, bias=True, device=device)
         self.vectors_dict = vectors_dict
         if support is None:
             self.support = set(self.vectors_dict.keys()) # includes UNK
-            self.support_vectors = torch.Tensor(list(self.vectors_dict.values()))
+            self.support_vectors = torch.Tensor(list(self.vectors_dict.values())).to(device)
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict])        
+            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict]).to(device)
+        self.device = device
 
     def forward(self, pairs):
         """ Batch is an iterable of <w, c>.
         This function computes <w_i | A | c_i> - \log \sum_w \exp <w | A | c_i> """
-        batch = embed_groups(self.vectors_dict, pairs, vocab=self.support)
+        batch = embed_groups(self.vectors_dict, pairs, vocab=self.support, device=self.device)
         v_w, v_c = batch.transpose(1,0) # transpose to 2 x B x K
         h_w = self.w_encoder(v_w) # shape B x E
-        h_c = self.c_encoder(v_c) # shape B x E 
+        h_c = self.c_encoder(v_c) # shape B x E
         h_v = self.w_encoder(self.support_vectors) # shape V x E
-        # energy = <w | A | c> + <B|w> + <C|c> + D; bias D is included in c_linear
-        energy = (self.bilinear(h_w, h_c) + self.w_linear(h_w) + self.c_linear(h_c)).squeeze(-1) # shape B
+        # energy = <w | A | c> + <B|w> + <C|c> + D; but <C|c>+D cancels out so not included
+        energy = (self.bilinear(h_w, h_c) + self.w_linear(h_w)).squeeze(-1) # shape B
         # logZ = ln \sum_w exp <w | A | c_i> -- numerical b
-        logZ = self.c_linear(h_c).squeeze(-1) + (
+        logZ = (
             opt_einsum.contract("vi,ij,bj->bv", h_v, self.bilinear.weight.squeeze(0), h_c) + # shape B x V
             self.w_linear(h_v).T # shape 1 x V
         ).logsumexp(-1) # shape B
         result = logZ - energy
-        if (result < -1).any():
-            import pdb; pdb.set_trace()
+        #if (result < -1).any():
+        #    import pdb; pdb.set_trace()
         return result
 
 # With [300, 25, 25], dev loss gets negative and train loss increases
@@ -398,7 +403,7 @@ def dict_transpose(iterable_of_dicts):
             result[k].append(v)
     return result
 
-def embed_groups(vectors, groups, vocab=None):
+def embed_groups(vectors, groups, vocab=None, device=DEVICE):
     """ Return a tensor of embeddings of the tuples of words indicated by groups. 
     Initial words that are not in vocab are mapped to UNK.
     """
@@ -412,7 +417,7 @@ def embed_groups(vectors, groups, vocab=None):
         ]
         for group in groups
     ]
-    return torch.Tensor(data) # shape V x G x K
+    return torch.Tensor(data).to(device) # shape V x G x K
 
 def main(vectors_filename,
             train_filename,
