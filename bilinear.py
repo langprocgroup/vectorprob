@@ -109,7 +109,7 @@ class WordVectors:
             self.word_indices[w] if w in vocab and w in self.word_indices else self.unk_index
             for w in words
         ]
-        return indices
+        return torch.stack(indices) # LOL because each index is a 0-dim Tensor
 
     def embed_words(self, words, vocab=None):
         indices = self.indices_of(words, vocab=vocab)
