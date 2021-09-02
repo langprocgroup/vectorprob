@@ -91,8 +91,7 @@ class WordVectors:
         
         assert UNK not in words
         words_with_unk = words | {UNK} # so UNK will be the last element
-        indices = torch.arange(len(words_with_unk), device=self.device) # contiguous memory
-        self.word_indices = dict(zip(words_with_unk, indices))#{w : indices[i] for i, w in enumerate(words_with_unk)} # LOL
+        self.word_indices = {w:i for i, w in enumerate(words_with_unk)}
         self.unk_index = self.word_indices[UNK]
         
         unk_vector = torch.randn(self.D)
@@ -108,8 +107,7 @@ class WordVectors:
             self.word_indices[w] if w in vocab and w in self.word_indices else self.unk_index
             for w in words
         ]
-        #return torch.LongTensor(indices).to(self.device)
-        return torch.stack(indices) # LOL because each index is a 0-dim Tensor
+        return torch.LongTensor(indices).to(self.device)
 
     def embed_words(self, words, vocab=None):
         indices = self.indices_of(words, vocab=vocab)
