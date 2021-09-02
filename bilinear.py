@@ -94,7 +94,7 @@ class WordVectors:
             w : torch.tensor(i).to(self.device) # LOL
             for i, w in enumerate(words_with_unk)
         }
-        self.unk_index = -1
+        self.unk_index = torch.tensor(-1).to(self.device) # LOL
         
         unk_vector = torch.randn(self.D)
         unk_vector /= torch.norm(unk_vector)
