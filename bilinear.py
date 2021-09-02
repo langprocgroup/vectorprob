@@ -91,7 +91,7 @@ class WordVectors:
         assert UNK not in words
         words_with_unk = words | {UNK} # so UNK will be the last element
         self.word_indices = {
-            w : torch.tensor(i).to(self.device) # LOL
+            w : torch.tensor(i).to(self.device) # LOL, so indices live on GPU
             for i, w in enumerate(words_with_unk)
         }
         self.unk_index = torch.tensor(-1).to(self.device) # LOL
@@ -383,6 +383,7 @@ def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_i
         backoff = BackoffSmoothing(train_data)
 
     first_line = True
+    start = datetime.datetime.now()
     for i in range(num_iter):
         train_batch = list(next(train_data_gen))
         
@@ -392,7 +393,8 @@ def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_i
         opt.step()
 
         if check_every is not None and i % check_every == 0:
-            diagnostic = {'step': i, 'train_mb_loss': loss.item()}
+            diagnostic = {'step': i, 'train_mb_loss': loss.item()}            
+            
             diagnostic['train_mb_mle'] = smoothed.surprisal(train_batch, 0)
             diagnostic['train_mb_smoothed_1.0'] = smoothed.surprisal(train_batch, 1)
             if G == 2:
@@ -426,7 +428,7 @@ def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_i
                     #diagnostic['dev_unseen_both_smoothed_0.5'] = smoothed.surprisal(dev_unseen_both_tokens, 1/2)
                     diagnostic['dev_unseen_both_smoothed_1.0'] = smoothed.surprisal(dev_unseen_both_tokens, 1)
                     diagnostic['dev_unseen_both_backoff_0.25'] = backoff.surprisal(dev_unseen_both_tokens, 1/4, 1)
-                    
+
                 if patience is not None and dev_loss > old_dev_loss:
                     excursions += 1
                     if excursions > patience:
@@ -434,6 +436,10 @@ def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_i
                     else:
                         old_dev_loss = dev_loss
                 diagnostic['dev_loss'] = dev_loss
+
+            curr_time = datetime.datetime.now()
+            diagnostic['time'] = str(curr_time - start)
+            start = curr_time                
 
             if first_line:
                 writer = csv.DictWriter(sys.stdout, diagnostic.keys())
@@ -548,4 +554,8 @@ if __name__ == '__main__':
     
 
 # 2001 calls to embed_words with total time 45.319
-# try moving word indices to LongTensor on GPU: 
+
+# Approach 1: Word indices are 0-dim tensors. Total time 
+
+
+
