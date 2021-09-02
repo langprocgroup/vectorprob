@@ -82,6 +82,7 @@ class BackoffSmoothing:
 
 class WordVectors:
     def __init__(self, words, vectors, device=DEVICE):
+        self.device = device
         words = set(words)
         vectors = list(vectors)
         assert len(words) == len(vectors)
@@ -89,13 +90,16 @@ class WordVectors:
         
         assert UNK not in words
         words_with_unk = words | {UNK} # so UNK will be the last element
-        self.word_indices = {w:i for i, w in enumerate(words_with_unk)}
+        self.word_indices = {
+            w : torch.tensor(i).to(self.device) # LOL
+            for i, w in enumerate(words_with_unk)
+        }
         self.unk_index = -1
         
         unk_vector = torch.randn(self.D)
         unk_vector /= torch.norm(unk_vector)
         vectors.append(list(unk_vector))
-        self.vectors = torch.Tensor(vectors).to(device)
+        self.vectors = torch.Tensor(vectors).to(self.device)
         self.unk_vector = self.vectors[self.unk_index]
 
     def indices_of(self, words, vocab=None):
@@ -109,7 +113,7 @@ class WordVectors:
 
     def embed_words(self, words, vocab=None):
         indices = self.indices_of(words, vocab=vocab)
-        return self.vectors[indices]
+        return self.vectors[indices] # this is the slowest part!
 
     def embed_groups(self, groups, vocab=None, restricted_index=0):
         """ Groups is an iterable of length B of tuples of G words. 
@@ -239,7 +243,10 @@ class ConditionalSoftmax(torch.nn.Module):
         ws, cs = zip(*pairs)
         c_vectors = self.vectors.embed_words(cs)
         outputs = self.net(c_vectors) # shape B x V
-        w_indices = torch.LongTensor([[self.support_indices[w] if w in self.support_indices else self.support_indices[UNK] for w in ws]])
+        w_indices = torch.LongTensor([[
+            self.support_indices[w] if w in self.support_indices else self.support_indices[UNK]
+            for w in ws
+        ]])
         logprobs = torch.gather(outputs, -1, w_indices).squeeze(-2) # shape B
         return -logprobs
 
@@ -539,3 +546,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     sys.exit(main(args.vectors, args.train, dev_filename=args.dev, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, one_hot=args.one_hot, no_encoders=args.no_encoders, seed=args.seed))
     
+
+# 2001 calls to embed_words with total time 45.319
+# try moving word indices to LongTensor on GPU: 
