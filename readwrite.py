@@ -4,10 +4,9 @@ import random
 import subprocess
 from collections import Counter
 
-import torch
 import tqdm
 
-UNK = "!!!<UNK>!!!"
+#UNK = "!!!<UNK>!!!"
 
 def line_count(filename):
     return int(subprocess.check_output(['wc', '-l', filename]).split()[0])
@@ -47,9 +46,6 @@ def read_vectors(filename):
             wordparts = parts[:-ndim]
             word = " ".join(wordparts)
             d[word] = numbers
-    unk_vector = torch.randn(ndim)
-    unk_vector /= torch.norm(unk_vector)
-    d[UNK] = list(unk_vector.numpy())
     return d
 
 def read_words(filename):
