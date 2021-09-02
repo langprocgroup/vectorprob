@@ -80,41 +80,87 @@ class BackoffSmoothing:
                 yield -math.log(bigram_prob + lamda * unigram_smoothed)
         return rfutils.mean(gen())
 
+class WordVectors:
+    def __init__(self, words, vectors, device=DEVICE):
+        words = set(words)
+        vectors = list(vectors)
+        assert len(words) == len(vectors)
+        self.D = len(rfutils.first(vectors))        
+        
+        assert UNK not in words
+        words_with_unk = words | {UNK} # so UNK will be the last element
+        self.word_indices = {w:i for i, w in enumerate(words_with_unk)}
+        self.unk_index = -1
+        
+        unk_vector = torch.randn(self.D)
+        unk_vector /= torch.norm(unk_vector)
+        vectors.append(list(unk_vector))
+        self.vectors = torch.Tensor(vectors).to(device)
+        self.unk_vector = self.vectors[self.unk_index]
+
+    def indices_of(self, words, vocab=None):
+        if vocab is None:
+            vocab = self.word_indices
+        indices = [
+            self.word_indices[w] if w in vocab and w in self.word_indices else self.unk_index
+            for w in words
+        ]
+        return indices
+
+    def embed_words(self, words, vocab=None):
+        indices = self.indices_of(words, vocab=vocab)
+        return self.vectors[indices]
+
+    def embed_groups(self, groups, vocab=None, restricted_index=0):
+        """ Groups is an iterable of length B of tuples of G words. 
+        Return a tensor of size G x B x D with the embeddings of the words.
+        
+        Apply vocabulary restriction only to the restricted index only.
+        """
+        columns = list(zip(*groups))
+        tensors = []
+        for i, column in enumerate(columns):
+            restricted_vocab = vocab if i == restricted_index else None
+            tensor = self.embed_words(column, vocab=restricted_vocab)
+            tensors.append(tensor)
+        return torch.stack(tensors)
+
 class MarginalLogLinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
+    def __init__(self, w_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
+        self.vectors = vectors
         if not w_encoder_structure:
             self.w_encoder = identity
-            w_E = len(rfutils.first(vectors_dict.values()))
+            K = self.vectors.D
         else:
             self.w_encoder = ff.FeedForward(w_encoder_structure, activation=ACTIVATIONS[activation], dropout=dropout, device=device)
-            w_E = w_encoder_structure[-1]
-        self.linear = torch.nn.Linear(w_E, 1, device=device) # weights
-        self.vectors_dict = vectors_dict
+            K = w_encoder_structure[-1]
+        self.linear = torch.nn.Linear(K, 1, bias=True, device=device)
         if support is None:
-            self.support = set(self.vectors_dict.keys()) # includes UNK
-            self.support_vectors = torch.Tensor(list(self.vectors_dict.values())).to(device)
+            self.support = self.vectors.word_indices
+            self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict]).to(device)
+            self.support_vectors = self.vectors.embed_words(self.support)
         self.device = device
 
     def forward(self, words):
         """ Batch has shape B x 1 x K or B x K
         This function computes < weights | w_i > - \log \sum_w \exp < weights | w > 
         """
-        batch = embed_groups(self.vectors_dict, words, vocab=self.support, device=self.device)
-        batch = batch.squeeze(-2) # shape B x K
+        batch = self.vectors.embed_words(words, vocab=self.support) # shape B x D
         energy = self.linear(self.w_encoder(batch)).squeeze(-1) # shape B
         logZ = self.linear(self.w_encoder(self.support_vectors)).squeeze(-1).logsumexp(-1) # shape 1, same across batch
         return logZ - energy
 
 class ConditionalLogLinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, c_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
+    def __init__(self, w_encoder_structure, c_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
+        self.vectors = vectors
+        
         if not w_encoder_structure:
             self.w_encoder = identity
-            w_E = len(rfutils.first(vectors_dict.values()))
+            K = self.vectors.D
         else:
             self.w_encoder = ff.FeedForward(
                 w_encoder_structure,
@@ -122,10 +168,10 @@ class ConditionalLogLinear(torch.nn.Module):
                 dropout=dropout,
                 device=device
             )
-            w_E = w_encoder_structure[-1]
+            K = w_encoder_structure[-1]
         if c_encoder_structure is None:
             self.c_encoder = self.w_encoder
-            c_E = w_E
+            L = K
         else:
             self.c_encoder = ff.FeedForward(
                 c_encoder_structure,
@@ -133,20 +179,20 @@ class ConditionalLogLinear(torch.nn.Module):
                 dropout=dropout,
                 device=device
             )
-            c_E = c_encoder_structure[-1]
-        self.linear = torch.nn.Linear(w_E + c_E, 1, device=device)
-        self.vectors_dict = vectors_dict
+            L = c_encoder_structure[-1]
+        self.linear = torch.nn.Linear(K + L, 1, device=device)
         if support is None:
-            self.support = set(self.vectors_dict.keys()) # includes UNK
-            self.support_vectors = torch.Tensor(list(self.vectors_dict.values())).to(device)
+            self.support = self.vectors.word_indices
+            self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict]).to(device)
+            self.support_vectors = self.vectors.embed_words(self.support)
         self.device = device
             
 
     def forward(self, pairs):
-        v_w, v_c = embed_groups(self.vectors_dict, pairs, vocab=self.support, device=self.device).transpose(0, 1)
+        raise NotImplementedError
+        v_w, v_c = self.vectors.embed_groups(pairs, vocab=self.support)
         h_w = self.w_encoder(v_w) # shape B x K
         h_c = self.c_encoder(v_c) # shape B x L
         h_wc = torch.cat([h_w, h_c], dim=-1) # shape B x (K + L)
@@ -159,13 +205,13 @@ class ConditionalLogLinear(torch.nn.Module):
         
         
 class ConditionalSoftmax(torch.nn.Module):
-    def __init__(self, c_encoder_structure, vectors_dict, support, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
+    def __init__(self, c_encoder_structure, vectors, support, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
+        self.vectors = vectors
         V = len(support)
-        w_E = len(rfutils.first(vectors_dict.values()))
         if c_encoder_structure is None:
             self.net = ff.FeedForward(
-                [w_E, V],
+                [self.vectors.D, V],
                 activation=None,
                 dropout=dropout,
                 transform=torch.nn.LogSoftmax(-1),
@@ -180,30 +226,31 @@ class ConditionalSoftmax(torch.nn.Module):
                 transform=torch.nn.LogSoftmax(-1),
                 device=device,
             )
-        self.vectors_dict = vectors_dict
         if support is None:
-            self.support = set(self.vectors_dict.keys()) # includes UNK
-            self.support_vectors = torch.Tensor(list(self.vectors_dict.values())).to(device)
+            self.support = self.vectors.word_indices
+            self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict]).to(device)
+            self.support_vectors = self.vectors.embed_words(self.support)
         self.support_indices = {w:i for i, w in enumerate(self.support)}
         self.device = device
 
     def forward(self, pairs):
         ws, cs = zip(*pairs)
-        c_vectors = embed_groups(self.vectors_dict, [(c,) for c in cs], device=self.device).squeeze(-2) # shape B x K
+        c_vectors = self.vectors.embed_words(cs)
         outputs = self.net(c_vectors) # shape B x V
         w_indices = torch.LongTensor([[self.support_indices[w] if w in self.support_indices else self.support_indices[UNK] for w in ws]])
         logprobs = torch.gather(outputs, -1, w_indices).squeeze(-2) # shape B
         return -logprobs
 
 class ConditionalLogBilinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, c_encoder_structure, vectors_dict, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
+    def __init__(self, w_encoder_structure, c_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
+        self.vectors = vectors
+        
         if w_encoder_structure is None:
             self.w_encoder = identity
-            w_E = len(rfutils.first(vectors_dict.values()))
+            K = self.vectors.D
         else:
             self.w_encoder = ff.FeedForward(
                 w_encoder_structure,
@@ -211,10 +258,10 @@ class ConditionalLogBilinear(torch.nn.Module):
                 dropout=dropout,
                 device=device
             )
-            w_E = w_encoder_structure[-1]
+            K = w_encoder_structure[-1]
         if c_encoder_structure is None:
             self.c_encoder = self.w_encoder
-            c_E = w_E
+            L = K
         else:
             self.c_encoder = ff.FeedForward(
                 c_encoder_structure,
@@ -222,23 +269,21 @@ class ConditionalLogBilinear(torch.nn.Module):
                 dropout=dropout,
                 device=device
             )
-            c_E = c_encoder_structure[-1]
-        self.bilinear = torch.nn.Bilinear(w_E, c_E, 1, bias=False, device=device)
-        self.w_linear = torch.nn.Linear(w_E, 1, bias=False, device=device)
-        self.vectors_dict = vectors_dict
+            L = c_encoder_structure[-1]
+        self.bilinear = torch.nn.Bilinear(K, L, 1, bias=False, device=device)
+        self.w_linear = torch.nn.Linear(K, 1, bias=False, device=device)
         if support is None:
-            self.support = set(self.vectors_dict.keys()) # includes UNK
-            self.support_vectors = torch.Tensor(list(self.vectors_dict.values())).to(device)
+            self.support = self.vectors.word_indices
+            self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = torch.Tensor([self.vectors_dict[w] for w in self.support if w in self.vectors_dict]).to(device)
+            self.support_vectors = self.vectors.embed_words(self.support)
         self.device = device
 
     def forward(self, pairs):
         """ Batch is an iterable of <w, c>.
         This function computes <w_i | A | c_i> - \log \sum_w \exp <w | A | c_i> """
-        batch = embed_groups(self.vectors_dict, pairs, vocab=self.support, device=self.device)
-        v_w, v_c = batch.transpose(1,0) # transpose to 2 x B x K
+        v_w, v_c = self.vectors.embed_groups(pairs, vocab=self.support)
         h_w = self.w_encoder(v_w) # shape B x E
         h_c = self.c_encoder(v_c) # shape B x E
         h_v = self.w_encoder(self.support_vectors) # shape V x E
@@ -269,7 +314,7 @@ def sample_from_histogram(histogram, k):
         yield sample
         counts[indices[sample]] -= 1
 
-def minibatches(elements, k):
+def minibatches(elements, k, verbose=True):
     elements = list(elements)
     for j in itertools.count():
         these_elements = elements.copy()
@@ -280,7 +325,8 @@ def minibatches(elements, k):
                 if these_elements:
                     this_sample.append(these_elements.pop())
             yield this_sample
-        print("Finished epoch %d" % j, file=sys.stderr)
+        if verbose:
+            print("Finished epoch %d" % j, file=sys.stderr)
 
 def filter_dict(d, ok_keys):
     return {k:v for k, v in d.items() if k in ok_keys}
@@ -304,7 +350,7 @@ def dev_split(train, dev):
         Counter(filter_dict(dev, unseen_both)),
     )
 
-def train(model, vectors_dict, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, **kwds):
+def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, **kwds):
 
     G = len(rfutils.first(train_data.keys()))    
 
@@ -403,22 +449,6 @@ def dict_transpose(iterable_of_dicts):
             result[k].append(v)
     return result
 
-def embed_groups(vectors, groups, vocab=None, device=DEVICE):
-    """ Return a tensor of embeddings of the tuples of words indicated by groups. 
-    Initial words that are not in vocab are mapped to UNK.
-    """
-    unk_vector = vectors[UNK]
-    if vocab is None:
-        vocab = vectors
-    data = [
-        [
-            unk_vector if word not in vectors or (i==0 and word not in vocab) else vectors[word]
-            for i, word in enumerate(group)
-        ]
-        for group in groups
-    ]
-    return torch.Tensor(data).to(device) # shape V x G x K
-
 def main(vectors_filename,
             train_filename,
             dev_filename=None,
@@ -437,10 +467,11 @@ def main(vectors_filename,
     if seed is not None:
         random.seed(seed)
     vectors_dict = rw.read_vectors(vectors_filename)
+    vectors = WordVectors(vectors_dict.keys(), vectors_dict.values(), device=DEVICE)
     if vocab:
         vocab_words = set(rw.read_words(vocab)) | {UNK}
     else:
-        vocab_words = set(vectors_dict.keys()) # includes unk already
+        vocab_words = vectors.word_indices
     print("Support size %d" % len(vocab_words), file=sys.stderr)
     
     train_data = rw.read_counts(train_filename)
@@ -452,7 +483,7 @@ def main(vectors_filename,
     if G == 1:
         model = MarginalLogLinear(
             eval(phi_structure) if not no_encoders else None,
-            vectors_dict,
+            vectors,
             activation=activation,
             dropout=dropout,
             support=vocab_words,
@@ -461,7 +492,7 @@ def main(vectors_filename,
         if softmax:
             model = ConditionalSoftmax(
                 eval(phi_structure) if not no_encoders else None,
-                vectors_dict,
+                vectors,
                 support=vocab_words,
                 activation=activation,
                 dropout=dropout,
@@ -470,7 +501,7 @@ def main(vectors_filename,
             model = ConditionalLogBilinear(
                 eval(phi_structure) if not no_encoders else None,
                 None if tie_params else eval(psi_structure),
-                vectors_dict,
+                vectors,
                 activation=activation,
                 dropout=dropout,
                 support=vocab_words,
@@ -478,7 +509,7 @@ def main(vectors_filename,
     else:
         raise ValueError("Only works for unigrams or bigrams, but %d-grams detected in training data" % G)
         
-    model, diagnostics = train(model, vectors_dict, train_data, dev_data=dev_data, **kwds)
+    model, diagnostics = train(model, train_data, dev_data=dev_data, **kwds)
     with open(output_filename, 'wb') as outfile:
         torch.save(model, outfile)
 
@@ -508,21 +539,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
     sys.exit(main(args.vectors, args.train, dev_filename=args.dev, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, one_hot=args.one_hot, no_encoders=args.no_encoders, seed=args.seed))
     
-
-# Claim: vector-based probability estimation can be sensitive to grammatical context
-# for example: if we are getting probabilities of attributive adjectives, we should not assign probability mass to adjectives that only appear as non-attributive like afraid
-# the man is afraid
-# *the afraid man
-# Is there a way to test this? For two adjectives a1 and a2 of equal corpus frequency, riwith a1 appearing attributively and a2 not appearing so, and neither a1 nor a2 appearing in the training set,
-# we should give P(a1) > P(a2).
-# Logic: imagine the word vectors have a feature [+ can appear as attributive adjective]. Then this feature will be highly upweighted.
-# So we need "critical pairs" a1 and a2 such that:
-# (1) a1 is known to appear in the critical context but a2 is known not to appear in the critical context
-# (2) a1 and a2 have equal general corpus frequency
-# (3) a1 and a2 both do not appear in the training set.
-
-# Maybe a simpler test is with homonyms. Let a1 and a2 be phonologically/orthographically identical.
-# Say a1 can be either an adjective or a homonymous noun, not appearing in the training set of adjectives.
-# Its frequency is a1_N + a1_A.
-# It should get probability only according to a1_A, not a1_A + a1_N.
-# Take a word a1 that does not appear in the training set of adjectives.
