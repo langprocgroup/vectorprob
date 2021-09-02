@@ -92,7 +92,7 @@ class WordVectors:
         assert UNK not in words
         words_with_unk = words | {UNK} # so UNK will be the last element
         indices = torch.arange(len(words_with_unk), device=self.device) # contiguous memory
-        self.word_indices = {w : indices[i] for i, w in enumerate(words_with_unk)} # LOL
+        self.word_indices = dict(zip(words_with_unk, indices))#{w : indices[i] for i, w in enumerate(words_with_unk)} # LOL
         self.unk_index = self.word_indices[UNK]
         
         unk_vector = torch.randn(self.D)
@@ -553,10 +553,6 @@ if __name__ == '__main__':
     sys.exit(main(args.vectors, args.train, dev_filename=args.dev, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, one_hot=args.one_hot, no_encoders=args.no_encoders, seed=args.seed))
     
 
-# 2001 calls to embed_words with total time 45.319
 
-# Approach 1: Word indices are 0-dim tensors. Total time 82.6, iterations 4.8s on average
-# Hypothesis: This approach messes up the memory contiguity of tensors very badly.
-# Approach 2: Traffic indices to GPU. Total time 62.6., iterations 4.9s on average
 
 
