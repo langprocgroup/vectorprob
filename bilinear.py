@@ -1,6 +1,7 @@
 import sys
 import csv
 import time
+
 import math
 import random
 import datetime
@@ -90,11 +91,9 @@ class WordVectors:
         
         assert UNK not in words
         words_with_unk = words | {UNK} # so UNK will be the last element
-        self.word_indices = {w : i for i, w in enumerate(words_with_unk)}
-        #    w : torch.tensor(i).to(self.device) # LOL, so indices live on GPU
-        #    for i, w in enumerate(words_with_unk)
-        #}
-        self.unk_index = -1#torch.tensor(-1).to(self.device) # LOL
+        indices = torch.arange(len(words_with_unk), device=self.device) # contiguous memory
+        self.word_indices = {w : indices[i] for i, w in enumerate(words_with_unk)} # LOL
+        self.unk_index = self.word_indices[UNK]
         
         unk_vector = torch.randn(self.D)
         unk_vector /= torch.norm(unk_vector)
@@ -109,8 +108,8 @@ class WordVectors:
             self.word_indices[w] if w in vocab and w in self.word_indices else self.unk_index
             for w in words
         ]
-        return torch.LongTensor(indices).to(self.device)
-        #return torch.stack(indices) # LOL because each index is a 0-dim Tensor
+        #return torch.LongTensor(indices).to(self.device)
+        return torch.stack(indices) # LOL because each index is a 0-dim Tensor
 
     def embed_words(self, words, vocab=None):
         indices = self.indices_of(words, vocab=vocab)
@@ -556,7 +555,8 @@ if __name__ == '__main__':
 
 # 2001 calls to embed_words with total time 45.319
 
-# Approach 1: Word indices are 0-dim tensors. Total time 
-
+# Approach 1: Word indices are 0-dim tensors. Total time 82.6, iterations 4.8s on average
+# Hypothesis: This approach messes up the memory contiguity of tensors very badly.
+# Approach 2: Traffic indices to GPU. Total time 62.6., iterations 4.9s on average
 
 
