@@ -96,7 +96,7 @@ class WordVectors:
         
         unk_vector = torch.randn(self.D)
         unk_vector /= torch.norm(unk_vector)
-        vectors.append(list(unk_vector))
+        vectors.append(list(unk_vector)) # UNK is the last vector
         self.vectors = torch.Tensor(vectors).to(self.device)
         self.unk_vector = self.vectors[self.unk_index]
 
@@ -107,11 +107,11 @@ class WordVectors:
             self.word_indices[w] if w in vocab and w in self.word_indices else self.unk_index
             for w in words
         ]
-        return torch.LongTensor(indices).to(self.device)
+        return torch.LongTensor(indices).to(self.device) # this is the biggest bottleneck!
 
     def embed_words(self, words, vocab=None):
         indices = self.indices_of(words, vocab=vocab)
-        return self.vectors[indices] # this is the slowest part!
+        return self.vectors[indices] 
 
     def embed_groups(self, groups, vocab=None, restricted_index=0):
         """ Groups is an iterable of length B of tuples of G words. 
@@ -147,10 +147,11 @@ class MarginalLogLinear(torch.nn.Module):
         self.device = device
 
     def forward(self, words):
-        """ Batch has shape B x 1 x K or B x K
+        """
         This function computes < weights | w_i > - \log \sum_w \exp < weights | w > 
         """
-        batch = self.vectors.embed_words(words, vocab=self.support) # shape B x D
+        only_words = [w for w, *_ in words]
+        batch = self.vectors.embed_words(only_words, vocab=self.support) # shape B x D
         energy = self.linear(self.w_encoder(batch)).squeeze(-1) # shape B
         logZ = self.linear(self.w_encoder(self.support_vectors)).squeeze(-1).logsumexp(-1) # shape 1, same across batch
         return logZ - energy
@@ -466,7 +467,6 @@ def main(vectors_filename,
             vocab=None,
             tie_params=False,
             softmax=False,
-            one_hot=False,
             no_encoders=False,
             seed=None,
             output_filename=DEFAULT_FILENAME,            
@@ -477,6 +477,7 @@ def main(vectors_filename,
             **kwds):
     if seed is not None:
         random.seed(seed)
+        torch.manual_seed(seed+1)
     vectors_dict = rw.read_vectors(vectors_filename)
     vectors = WordVectors(vectors_dict.keys(), vectors_dict.values(), device=DEVICE)
     if vocab:
@@ -535,7 +536,6 @@ if __name__ == '__main__':
     parser.add_argument("--vocab", type=str, default=None, help="Limit output vocabulary to words in the given file if provided")
     parser.add_argument("--tie_params", action='store_true', help="Set phi = psi")
     parser.add_argument("--softmax", action='store_true', help="Only use vectors for the context word, not the target word")
-    parser.add_argument("--one_hot", action='store_true', help="Ignore vectors and use one-hot embeddings instead")
     parser.add_argument("--num_iter", type=int, default=DEFAULT_NUM_ITER)
     parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="batch size; 0 means full gradient descent with no batches")
     parser.add_argument("--lr", type=float, default=DEFAULT_LR, help="starting learning rate for Adam")
@@ -548,7 +548,7 @@ if __name__ == '__main__':
     parser.add_argument("--output_filename", type=str, default=DEFAULT_FILENAME, help="Output filename. If not specified, a default is used which indicates the time the training script was run..")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for minibatches.")
     args = parser.parse_args()
-    sys.exit(main(args.vectors, args.train, dev_filename=args.dev, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, one_hot=args.one_hot, no_encoders=args.no_encoders, seed=args.seed))
+    sys.exit(main(args.vectors, args.train, dev_filename=args.dev, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size))
     
 
 
