@@ -6,17 +6,30 @@ from collections import Counter
 
 import tqdm
 
-#UNK = "!!!<UNK>!!!"
+INF = float('inf')
 
 def line_count(filename):
     return int(subprocess.check_output(['wc', '-l', filename]).split()[0])
+
+def read_numbers(filename):
+    lc = line_count(filename)
+    def gen():
+        with open(filename) as infile:
+            print("Reading numbers from %s ..." % filename, file=sys.stderr)
+            reader = csv.reader(infile)
+            for *parts, count in tqdm.tqdm(reader, total=lc):
+                count = float(count)
+                if count == INF or count == -INF:
+                    print("Bad line: %s" % str(parts + [count]), file=sys.stderr)
+                yield tuple(parts), count
+    return dict(gen())
 
 def read_counts(filename, verbose=False):
     lc = line_count(filename)
     def gen():
         with open(filename) as infile:
             print("Reading counts from %s ..." % filename, file=sys.stderr)
-            reader = csv.reader(infile)            
+            reader = csv.reader(infile)
             for *parts, count in tqdm.tqdm(reader, total=lc):
                 count = int(count)
                 yield tuple(parts), count
@@ -26,6 +39,12 @@ def read_counts(filename, verbose=False):
         print("Total %d" % N, file=sys.stderr)
     return result
 
+def read_groups(filename):
+    lc = line_count(filename)
+    with open(filename) as infile:
+        reader = csv.reader(infile)
+        yield from tqdm.tqdm(reader)
+    
 def write_counts(outfile, items):
     writer = csv.writer(outfile)
     for parts, count in items:

@@ -8,7 +8,6 @@ import datetime
 import itertools
 from collections import Counter
 
-import tqdm
 import torch
 import rfutils
 import opt_einsum 
@@ -28,6 +27,7 @@ DEFAULT_CHECK_EVERY = 100
 DEFAULT_PATIENCE = None
 DEFAULT_DROPOUT = 0.0
 DEFAULT_FILENAME = "model_%s.pt" % str(datetime.datetime.now()).split(".")[0].replace(" ", "_")
+EPSILON = 10 ** -7
 
 ACTIVATIONS = {
     'relu': torch.nn.ReLU(),
@@ -37,6 +37,9 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def identity(x):
     return x
+
+def loglogit(x, eps=EPSILON):
+    return x - torch.log(1 - torch.exp(x - eps))
 
 class AdditiveSmoothing:
     def __init__(self, counts):
@@ -356,7 +359,7 @@ def dev_split(train, dev):
         Counter(filter_dict(dev, unseen_both)),
     )
 
-def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, **kwds):
+def train(model, train_data, dev_data=None, test_data=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, **kwds):
 
     G = len(rfutils.first(train_data.keys()))    
 
@@ -371,6 +374,10 @@ def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_i
             dev_unseen_w_tokens = list(dev_unseen_w.elements())
             dev_unseen_c_tokens = list(dev_unseen_c.elements())
             dev_unseen_both_tokens = list(dev_unseen_both.elements())
+
+    if test_data:
+        test_tokens = list(test_data.keys())
+        test_values = torch.Tensor(list(test_data.values()))
 
     opt = torch.optim.Adam(params=list(model.parameters()), **kwds)
     diagnostics = []
@@ -398,9 +405,9 @@ def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_i
             diagnostic['train_mb_smoothed_1.0'] = smoothed.surprisal(train_batch, 1)
             if G == 2:
                 diagnostic['train_mb_backoff_0.25'] = backoff.surprisal(train_batch, 1/4, 1)
-            
+
+            me = model.eval()
             if dev_data:
-                me = model.eval()
                 dev_loss = me(dev_tokens).mean().item()
                 diagnostic['dev_loss'] = dev_loss
                 diagnostic['dev_smoothed_1.0'] = smoothed.surprisal(dev_tokens, 1)
@@ -428,6 +435,7 @@ def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_i
                     diagnostic['dev_unseen_both_smoothed_1.0'] = smoothed.surprisal(dev_unseen_both_tokens, 1)
                     diagnostic['dev_unseen_both_backoff_0.25'] = backoff.surprisal(dev_unseen_both_tokens, 1/4, 1)
 
+
                 if patience is not None and dev_loss > old_dev_loss:
                     excursions += 1
                     if excursions > patience:
@@ -435,6 +443,12 @@ def train(model, train_data, dev_data=None, batch_size=DEFAULT_BATCH_SIZE, num_i
                     else:
                         old_dev_loss = dev_loss
                 diagnostic['dev_loss'] = dev_loss
+
+            if test_data is not None:
+               est = loglogit(-me(test_tokens))
+               obs = loglogit(test_values)
+               #import pdb; pdb.set_trace()
+               diagnostic['test_err'] = ((est - obs)**2).mean().item()
 
             curr_time = datetime.datetime.now()
             diagnostic['time'] = str(curr_time - start)
@@ -464,6 +478,7 @@ def dict_transpose(iterable_of_dicts):
 def main(vectors_filename,
             train_filename,
             dev_filename=None,
+            test_filename=None,
             vocab=None,
             tie_params=False,
             softmax=False,
@@ -486,11 +501,16 @@ def main(vectors_filename,
         vocab_words = vectors.word_indices
     print("Support size %d" % len(vocab_words), file=sys.stderr)
     
-    train_data = rw.read_counts(train_filename)
+    train_data = rw.read_counts(train_filename, verbose=True)
     if dev_filename:
-        dev_data = rw.read_counts(dev_filename)
+        dev_data = rw.read_counts(dev_filename, verbose=True)
     else:
         dev_data = None
+    if test_filename:
+        test_data = rw.read_numbers(test_filename)
+    else:
+        test_data = None
+    
     G = len(rfutils.first(train_data.keys()))
     if G == 1:
         model = MarginalLogLinear(
@@ -521,11 +541,9 @@ def main(vectors_filename,
     else:
         raise ValueError("Only works for unigrams or bigrams, but %d-grams detected in training data" % G)
         
-    model, diagnostics = train(model, train_data, dev_data=dev_data, **kwds)
-    with open(output_filename, 'wb') as outfile:
-        torch.save(model, outfile)
-
-    return 0
+    model, diagnostics = train(model, train_data, dev_data=dev_data, test_data=test_data, **kwds)
+    torch.save(model, output_filename)
+    return model
 
 if __name__ == '__main__':
     import argparse
@@ -533,6 +551,7 @@ if __name__ == '__main__':
     parser.add_argument("vectors", type=str, help="Path to word vectors in word2vec format")
     parser.add_argument("train", type=str, help="Path to file containing training counts of word pairs")
     parser.add_argument("--dev", type=str, default=None, help="Path to file containing dev counts of word pairs")
+    parser.add_argument("--test", type=str, default=None, help="Path to file containing test log probabilities")
     parser.add_argument("--vocab", type=str, default=None, help="Limit output vocabulary to words in the given file if provided")
     parser.add_argument("--tie_params", action='store_true', help="Set phi = psi")
     parser.add_argument("--softmax", action='store_true', help="Only use vectors for the context word, not the target word")
@@ -548,9 +567,7 @@ if __name__ == '__main__':
     parser.add_argument("--output_filename", type=str, default=DEFAULT_FILENAME, help="Output filename. If not specified, a default is used which indicates the time the training script was run..")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for minibatches.")
     args = parser.parse_args()
-    sys.exit(main(args.vectors, args.train, dev_filename=args.dev, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size))
+    main(args.vectors, args.train, dev_filename=args.dev, test_filename=args.test, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size)
+
     
-
-
-
 
