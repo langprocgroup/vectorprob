@@ -377,7 +377,7 @@ def train(model, train_data, dev_data=None, test_data=None, batch_size=DEFAULT_B
 
     if test_data:
         test_tokens = list(test_data.keys())
-        test_values = torch.Tensor(list(test_data.values()))
+        test_values = torch.Tensor(list(test_data.values())).to(DEVICE)
 
     opt = torch.optim.Adam(params=list(model.parameters()), **kwds)
     diagnostics = []
