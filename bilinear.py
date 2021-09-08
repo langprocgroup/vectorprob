@@ -26,7 +26,7 @@ DEFAULT_ACTIVATION = "relu"
 DEFAULT_CHECK_EVERY = 100
 DEFAULT_PATIENCE = None
 DEFAULT_DROPOUT = 0.0
-DEFAULT_FILENAME = "model_%s.pt" % str(datetime.datetime.now()).split(".")[0].replace(" ", "_")
+DEFAULT_FILENAME = "output/model_%s.pt" % str(datetime.datetime.now()).split(".")[0].replace(" ", "_")
 EPSILON = 10 ** -7
 
 ACTIVATIONS = {
@@ -85,22 +85,19 @@ class BackoffSmoothing:
         return rfutils.mean(gen())
 
 class WordVectors:
-    def __init__(self, words, vectors, device=DEVICE):
+    def __init__(self, vectors_dict, device=DEVICE):
         self.device = device
-        words = list(words)
-        assert len(words) == len(set(words))
-        vectors = list(vectors)
-        assert len(words) == len(vectors)
+        words, vectors = zip(*vectors_dict.items())
         self.D = len(rfutils.first(vectors))        
         
         assert UNK not in words
-        words.append(UNK)
-        self.word_indices = {w:i for i, w in enumerate(words)}
+        words_with_unk = words + (UNK,)
+        self.word_indices = {w:i for i, w in enumerate(words_with_unk)}
         self.unk_index = self.word_indices[UNK]
         
         unk_vector = torch.randn(self.D)
         unk_vector /= torch.norm(unk_vector) # needs to be norm 1 like other vectors
-        vectors.append(list(unk_vector)) # UNK is guaranteed to be the last vector
+        vectors = vectors + (unk_vector,) 
         self.vectors = torch.Tensor(vectors).to(self.device)
         self.unk_vector = self.vectors[self.unk_index]
 
@@ -111,22 +108,12 @@ class WordVectors:
         ]
         return indices
 
-    def embed_words(self, words, vocab=None):
-        indices = torch.LongTensor(self.indices_of(words, vocab=vocab)).to(self.device)
-        return self.vectors[indices]
-
-    def embed_groups(self, groups, vocab=None, restricted_index=0):
-        """ Groups is an iterable of length B of tuples of G words. 
-        Yield G tensors of size B x D with the embeddings of the words.
-        
-        Apply vocabulary restriction to the restricted index only.
-        """
-        columns = list(zip(*groups))
-        for i, column in enumerate(columns):
-            if i == restricted_index:
-                yield self.embed_words(column, vocab=vocab)
-            else:
-                yield self.embed_words(column)
+    def embed_words(self, words, vocab=None, unique=False):
+        indices = self.indices_of(words, vocab=vocab)
+        if unique:
+            indices = list(set(indices))
+        indices_t = torch.LongTensor(indices).to(self.device)
+        return self.vectors[indices_t]
 
 class MarginalLogLinear(torch.nn.Module):
     def __init__(self, w_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
@@ -144,7 +131,7 @@ class MarginalLogLinear(torch.nn.Module):
             self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support)
+            self.support_vectors = self.vectors.embed_words(self.support, unique=True)
         self.device = device
 
     def forward(self, words):
@@ -190,13 +177,15 @@ class ConditionalLogLinear(torch.nn.Module):
             self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support)
+            self.support_vectors = self.vectors.embed_words(self.support, unique=True)
         self.device = device
             
 
     def forward(self, pairs):
         raise NotImplementedError
-        v_w, v_c = self.vectors.embed_groups(pairs, vocab=self.support)
+        ws, cs = zip(*pairs)
+        v_w = self.vectors.embed_words(ws, vocab=self.support)
+        v_c = self.vectors.embed_words(cs)
         h_w = self.w_encoder(v_w) # shape B x K
         h_c = self.c_encoder(v_c) # shape B x L
         h_wc = torch.cat([h_w, h_c], dim=-1) # shape B x (K + L)
@@ -235,7 +224,7 @@ class ConditionalSoftmax(torch.nn.Module):
             self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support)
+            self.support_vectors = self.vectors.embed_words(self.support, unique=True)
         self.support_indices = {w:i for i, w in enumerate(self.support)}
         self.device = device
 
@@ -284,13 +273,15 @@ class ConditionalLogBilinear(torch.nn.Module):
             self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support)
+            self.support_vectors = self.vectors.embed_words(self.support, unique=True)
         self.device = device
 
     def forward(self, pairs):
         """ Batch is an iterable of <w, c>.
         This function computes <w_i | A | c_i> - \log \sum_w \exp <w | A | c_i> """
-        v_w, v_c = self.vectors.embed_groups(pairs, vocab=self.support, restricted_index=0)
+        ws, cs = zip(*pairs)
+        v_w = self.vectors.embed_words(ws, vocab=self.support)
+        v_c = self.vectors.embed_words(cs)
         h_w = self.w_encoder(v_w) # shape B x K
         h_c = self.c_encoder(v_c) # shape B x L
         h_v = self.w_encoder(self.support_vectors) # shape V x L
@@ -302,9 +293,6 @@ class ConditionalLogBilinear(torch.nn.Module):
             self.w_linear(h_v).T # shape 1 x V
         ).logsumexp(-1) # shape B
         result = logZ - energy
-        #if (result < -1).any():
-        #    import pdb; pdb.set_trace()
-        #import pdb; pdb.set_trace()
         return result
 
 # With [300, 25, 25], dev loss gets negative and train loss increases
@@ -493,7 +481,7 @@ def main(vectors_filename,
         random.seed(seed)
         torch.manual_seed(seed+1)
     vectors_dict = rw.read_vectors(vectors_filename)
-    vectors = WordVectors(vectors_dict.keys(), vectors_dict.values(), device=DEVICE)
+    vectors = WordVectors(vectors_dict, device=DEVICE)
     if vocab:
         vocab_words = set(rw.read_words(vocab)) | {UNK}
     else:
