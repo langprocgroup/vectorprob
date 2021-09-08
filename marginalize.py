@@ -4,14 +4,17 @@ from collections import Counter
 
 import tqdm
 
+def marginalize(lines, column):
+    c = Counter()
+    for *parts, count in tqdm.tqdm(lines):
+        c[parts[column]] += int(count)
+    return c
+
 def main(filename, column):
     column = int(column)
     with open(filename) as infile:
         reader = csv.reader(infile)
-        #header = next(reader) # skip header
-        c = Counter()
-        for *parts, count in tqdm.tqdm(reader):
-            c[parts[column]] += int(count)
+        c = marginalize(reader, column)
     writer = csv.writer(sys.stdout)
     #writer.writerow(header)
     for item in c.items():
