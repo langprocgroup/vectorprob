@@ -2,11 +2,11 @@
 
 for LANG in en es ar ko; do
     
-    TRAIN1=data/${LANG}wiki_train.csv
+    TRAIN1=data/${LANG}100k_an_train.csv
     TRAIN2=data/${LANG}_ud_train.csv
 
     DEV1=data/${LANG}_ud.csv
-    DEV2=data/${LANG}wiki_dev.csv
+    DEV2=data/${LANG}100k_an_dev.csv
     
     VOCAB=data/${LANG}_adj10k.txt
     VECTORS=~/data/wordvecs/wikivecs_aligned/wiki.${LANG}short.align.vec
