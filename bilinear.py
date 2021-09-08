@@ -131,7 +131,7 @@ class MarginalLogLinear(torch.nn.Module):
             self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support, unique=True)
+            self.support_vectors = self.vectors.embed_words(self.support, unique=True).contiguous()
         self.device = device
 
     def forward(self, words):
@@ -177,7 +177,7 @@ class ConditionalLogLinear(torch.nn.Module):
             self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support, unique=True)
+            self.support_vectors = self.vectors.embed_words(self.support, unique=True).contiguous()
         self.device = device
             
 
@@ -224,7 +224,7 @@ class ConditionalSoftmax(torch.nn.Module):
             self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support, unique=True)
+            self.support_vectors = self.vectors.embed_words(self.support, unique=True).contiguous()
         self.support_indices = {w:i for i, w in enumerate(self.support)}
         self.device = device
 
@@ -273,7 +273,7 @@ class ConditionalLogBilinear(torch.nn.Module):
             self.support_vectors = self.vectors.vectors
         else:
             self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support, unique=True)
+            self.support_vectors = self.vectors.embed_words(self.support, unique=True).contiguous()
         self.device = device
 
     def forward(self, pairs):
@@ -288,15 +288,10 @@ class ConditionalLogBilinear(torch.nn.Module):
         # energy = <w | A | c> + <B|w> + <C|c> + D; but <C|c>+D cancels out so not included
         energy = (self.bilinear(h_w, h_c) + self.w_linear(h_w)).squeeze(-1) # shape B
         # logZ = ln \sum_w exp <w | A | c_i> -- numerical b
-        logZ = (
-            opt_einsum.contract("vi,ij,bj->bv", h_v, self.bilinear.weight.squeeze(0), h_c) + # shape B x V
-            self.w_linear(h_v).T # shape 1 x V
-        ).logsumexp(-1) # shape B
+        A = self.bilinear.weight.squeeze(0)
+        logZ = (opt_einsum.contract("vi,ij,bj->bv", h_v, A, h_c) + self.w_linear(h_v).T).logsumexp(-1)
         result = logZ - energy
         return result
-
-# With [300, 25, 25], dev loss gets negative and train loss increases
-# Suggests spurious energy is being transfered to unseen combos
 
 def sample_from_histogram(histogram, k):
     # Very slow
