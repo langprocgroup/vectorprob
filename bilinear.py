@@ -248,7 +248,7 @@ class ConditionalSoftmax(torch.nn.Module):
         w_indices = torch.LongTensor([[
             self.support_indices[w] if w in self.support_indices else self.support_indices[UNK]
             for w in ws
-        ]])
+        ]]).to(self.device)
         logprobs = torch.gather(outputs, -1, w_indices).squeeze(-2) # shape B
         return -logprobs
 
