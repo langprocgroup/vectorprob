@@ -87,48 +87,46 @@ class BackoffSmoothing:
 class WordVectors:
     def __init__(self, words, vectors, device=DEVICE):
         self.device = device
-        words = set(words)
+        words = list(words)
+        assert len(words) == len(set(words))
         vectors = list(vectors)
         assert len(words) == len(vectors)
         self.D = len(rfutils.first(vectors))        
         
         assert UNK not in words
-        words_with_unk = words | {UNK} # so UNK will be the last element
-        self.word_indices = {w:i for i, w in enumerate(words_with_unk)}
+        words.append(UNK)
+        self.word_indices = {w:i for i, w in enumerate(words)}
         self.unk_index = self.word_indices[UNK]
         
         unk_vector = torch.randn(self.D)
-        unk_vector /= torch.norm(unk_vector)
-        vectors.append(list(unk_vector)) # UNK is the last vector
+        unk_vector /= torch.norm(unk_vector) # needs to be norm 1 like other vectors
+        vectors.append(list(unk_vector)) # UNK is guaranteed to be the last vector
         self.vectors = torch.Tensor(vectors).to(self.device)
         self.unk_vector = self.vectors[self.unk_index]
 
     def indices_of(self, words, vocab=None):
-        if vocab is None:
-            vocab = self.word_indices
         indices = [
-            self.word_indices[w] if w in vocab and w in self.word_indices else self.unk_index
+            self.word_indices[w] if (vocab is None or w in vocab) and w in self.word_indices else self.unk_index
             for w in words
         ]
-        return torch.LongTensor(indices).to(self.device) # this is the biggest bottleneck!
+        return indices
 
     def embed_words(self, words, vocab=None):
-        indices = self.indices_of(words, vocab=vocab)
-        return self.vectors[indices] 
+        indices = torch.LongTensor(self.indices_of(words, vocab=vocab)).to(self.device)
+        return self.vectors[indices]
 
     def embed_groups(self, groups, vocab=None, restricted_index=0):
         """ Groups is an iterable of length B of tuples of G words. 
-        Return a tensor of size G x B x D with the embeddings of the words.
+        Yield G tensors of size B x D with the embeddings of the words.
         
-        Apply vocabulary restriction only to the restricted index only.
+        Apply vocabulary restriction to the restricted index only.
         """
         columns = list(zip(*groups))
-        tensors = []
         for i, column in enumerate(columns):
-            restricted_vocab = vocab if i == restricted_index else None
-            tensor = self.embed_words(column, vocab=restricted_vocab)
-            tensors.append(tensor)
-        return torch.stack(tensors)
+            if i == restricted_index:
+                yield self.embed_words(column, vocab=vocab)
+            else:
+                yield self.embed_words(column)
 
 class MarginalLogLinear(torch.nn.Module):
     def __init__(self, w_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
@@ -244,7 +242,7 @@ class ConditionalSoftmax(torch.nn.Module):
     def forward(self, pairs):
         ws, cs = zip(*pairs)
         c_vectors = self.vectors.embed_words(cs)
-        outputs = self.net(c_vectors) # shape B x V
+        outputs = self.net(c_vectors) # shape B x V, logspace normalized
         w_indices = torch.LongTensor([[
             self.support_indices[w] if w in self.support_indices else self.support_indices[UNK]
             for w in ws
@@ -292,10 +290,10 @@ class ConditionalLogBilinear(torch.nn.Module):
     def forward(self, pairs):
         """ Batch is an iterable of <w, c>.
         This function computes <w_i | A | c_i> - \log \sum_w \exp <w | A | c_i> """
-        v_w, v_c = self.vectors.embed_groups(pairs, vocab=self.support)
-        h_w = self.w_encoder(v_w) # shape B x E
-        h_c = self.c_encoder(v_c) # shape B x E
-        h_v = self.w_encoder(self.support_vectors) # shape V x E
+        v_w, v_c = self.vectors.embed_groups(pairs, vocab=self.support, restricted_index=0)
+        h_w = self.w_encoder(v_w) # shape B x K
+        h_c = self.c_encoder(v_c) # shape B x L
+        h_v = self.w_encoder(self.support_vectors) # shape V x L
         # energy = <w | A | c> + <B|w> + <C|c> + D; but <C|c>+D cancels out so not included
         energy = (self.bilinear(h_w, h_c) + self.w_linear(h_w)).squeeze(-1) # shape B
         # logZ = ln \sum_w exp <w | A | c_i> -- numerical b
@@ -306,6 +304,7 @@ class ConditionalLogBilinear(torch.nn.Module):
         result = logZ - energy
         #if (result < -1).any():
         #    import pdb; pdb.set_trace()
+        #import pdb; pdb.set_trace()
         return result
 
 # With [300, 25, 25], dev loss gets negative and train loss increases
