@@ -1,37 +1,48 @@
 #!/usr/bin/env bash
 
-TRAIN=data/en_ud_train.csv
-DEV1=data/en_ud_devtest.csv
-DEV2=data/enwiki_dev.csv
-VOCAB=data/en_adj10k.txt
-SEED=0
+for LANG in en es ar ko; do
+    
+    TRAIN1=data/${LANG}wiki_train.csv
+    TRAIN2=data/${LANG}_ud_train.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV1 --vocab $VOCAB > logs/en_bilinear_encoder_d0_udtrain_uddev.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV2 --vocab $VOCAB > logs/en_bilinear_encoder_d0_udtrain_wikidev.csv
+    DEV1=data/${LANG}_ud.csv
+    DEV2=data/${LANG}wiki_dev.csv
+    
+    VOCAB=data/${LANG}_adj10k.txt
+    VECTORS=~/data/wordvecs/wikivecs_aligned/wiki.${LANG}short.align.vec
+    
+    SEED=0
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --dropout 0.1 --seed $SEED --dev $DEV1 --vocab $VOCAB > logs/en_bilinear_encoder_d01_udtrain_uddev.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --dropout 0.1 --seed $SEED --dev $DEV2 --vocab $VOCAB > logs/en_bilinear_encoder_d01_udtrain_wikidev.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV1 --vocab $VOCAB > logs/${LANG}_bilinear_encoder_b64_wikitrain_uddev.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV2 --vocab $VOCAB > logs/${LANG}_bilinear_encoder_b64_wikitrain_uddev.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV1 --vocab $VOCAB --no_encoders > logs/en_bilinear_noencoder_d0_udtrain_uddev.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV2 --vocab $VOCAB --no_encoders > logs/en_bilinear_noencoder_d0_udtrain_wikidev.csv
+    python bilinear.py $VECTORS $TRAIN1 --batch_size 512 --seed $SEED --dev $DEV1 --vocab $VOCAB > logs/${LANG}_bilinear_encoder_b512_wikitrain_uddev.csv
+    python bilinear.py $VECTORS $TRAIN1 --batch_size 512 --seed $SEED --dev $DEV2 --vocab $VOCAB > logs/${LANG}_bilinear_encoder_b512_wikitrain_uddev.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --dropout 0.1 --seed $SEED --dev $DEV1 --vocab $VOCAB --no_encoders > logs/en_bilinear_noencoder_d01_udtrain_uddev.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --dropout 0.1 --seed $SEED --dev $DEV2 --vocab $VOCAB --no_encoders > logs/en_bilinear_noencoder_d01_udtrain_wikidev.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV1 --vocab $VOCAB --no_encoders > logs/${LANG}_bilinear_noencoder_b64_wikitrain_uddev.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV2 --vocab $VOCAB --no_encoders > logs/${LANG}_bilinear_noencoder_b64_wikitrain_uddev.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV1 --vocab $VOCAB --softmax > logs/en_softmax_encoder_d0_udtrain_uddev.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV2 --vocab $VOCAB --softmax > logs/en_softmax_encoder_d0_udtrain_wikidev.csv
+    python bilinear.py $VECTORS $TRAIN1 --batch_size 512 --seed $SEED --dev $DEV1 --vocab $VOCAB --no_encoders > logs/${LANG}_bilinear_noencoder_b512_wikitrain_uddev.csv
+    python bilinear.py $VECTORS $TRAIN1 --batch_size 512 --seed $SEED --dev $DEV2 --vocab $VOCAB --no_encoders > logs/${LANG}_bilinear_noencoder_b512_wikitrain_uddev.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --dropout 0.1 --seed $SEED --dev $DEV1 --vocab $VOCAB --softmax > logs/en_softmax_encoder_d01_udtrain_uddev.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --dropout 0.1 --seed $SEED --dev $DEV2 --vocab $VOCAB --softmax > logs/en_softmax_encoder_d01_udtrain_wikidev.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV1 --vocab $VOCAB --softmax > logs/${LANG}_softmax_encoder_b64_wikitrain_uddev.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV2 --vocab $VOCAB --softmax > logs/${LANG}_softmax_encoder_b64_wikitrain_uddev.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV1 --vocab $VOCAB --softmax --no_encoders > logs/en_softmax_noencoder_d0_udtrain_uddev.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV2 --vocab $VOCAB --softmax --no_encoders > logs/en_softmax_noencoder_d0_udtrain_wikidev.csv
+    python bilinear.py $VECTORS $TRAIN1 --batch_size 512 --seed $SEED --dev $DEV1 --vocab $VOCAB --softmax > logs/${LANG}_softmax_encoder_b512_wikitrain_uddev.csv
+    python bilinear.py $VECTORS $TRAIN1 --batch_size 512 --seed $SEED --dev $DEV2 --vocab $VOCAB --softmax > logs/${LANG}_softmax_encoder_b512_wikitrain_uddev.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --dropout 0.1 --seed $SEED --dev $DEV1 --vocab $VOCAB --softmax --no_encoders > logs/en_softmax_noencoder_d01_udtrain_uddev.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --dropout 0.1 --seed $SEED --dev $DEV2 --vocab $VOCAB --softmax --no_encoders > logs/en_softmax_noencoder_d01_udtrain_wikidev.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV1 --vocab $VOCAB --softmax --no_encoders > logs/${LANG}_softmax_noencoder_b64_wikitrain_uddev.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV2 --vocab $VOCAB --softmax --no_encoders > logs/${LANG}_softmax_noencoder_b64_wikitrain_uddev.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV1 --vocab $VOCAB --tie_params logs/en_bilinear_encoder_d0_udtrain_uddev_tied.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV2 --vocab $VOCAB --tie_params logs/en_bilinear_encoder_d0_udtrain_wikidev_tied.csv
+    python bilinear.py $VECTORS $TRAIN1 --batch_size 512 --seed $SEED --dev $DEV1 --vocab $VOCAB --softmax --no_encoders > logs/${LANG}_softmax_noencoder_b512_wikitrain_uddev.csv
+    python bilinear.py $VECTORS $TRAIN1 --batch_size 512 --seed $SEED --dev $DEV2 --vocab $VOCAB --softmax --no_encoders > logs/${LANG}_softmax_noencoder_b512_wikitrain_uddev.csv
 
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV1 logs/en_bilinear_encoder_d0_udtrain_uddev_vw.csv
-python bilinear.py /Users/canjo/data/wikivecs/wiki.enshort.align.vec $TRAIN --seed $SEED --dev $DEV2 logs/en_bilinear_encoder_d0_udtrain_wikidev_vw.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV1 --vocab $VOCAB --tie_params > logs/${LANG}_bilinear_encoder_b64_wikitrain_uddev_tied.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV2 --vocab $VOCAB --tie_params > logs/${LANG}_bilinear_encoder_b64_wikitrain_uddev_tied.csv
+
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV1 > logs/${LANG}_bilinear_encoder_b64_wikitrain_uddev_vw.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV2 > logs/${LANG}_bilinear_encoder_b64_wikitrain_uddev_vw.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV1 --batch_size 512 > logs/${LANG}_bilinear_encoder_b512_wikitrain_uddev_vw.csv
+    python bilinear.py $VECTORS $TRAIN1 --seed $SEED --dev $DEV2 --batch_size 512 > logs/${LANG}_bilinear_encoder_b512_wikitrain_uddev_vw.csv
+
+done
