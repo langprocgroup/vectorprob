@@ -333,7 +333,7 @@ def dev_split(train, dev):
     print("N unseen combo: %d" % len(unseen_combo), file=sys.stderr)
     print("N unseen w: %d" % len(unseen_w), file=sys.stderr)
     print("N unseen c: %d" % len(unseen_c), file=sys.stderr)
-    print("N unseen both: %d" % len(unseen_both), file=sys.stderr)    
+    print("N unseen both: %d" % len(unseen_both), file=sys.stderr)
     return (
         Counter(filter_dict(dev, unseen_combo)),
         Counter(filter_dict(dev, unseen_w)),
@@ -350,7 +350,7 @@ def train(model, train_data, dev_data=None, test_data=None, batch_size=DEFAULT_B
         dev_tokens = list(dev_data.elements())
 
         if G == 2:
-            dev_unseen_combo, dev_unseen_w, dev_unseen_c, dev_unseen_both = dev_split(train_data, dev_data)        
+            dev_unseen_combo, dev_unseen_w, dev_unseen_c, dev_unseen_both = dev_split(train_data, dev_data)
 
             dev_unseen_combo_tokens = list(dev_unseen_combo.elements())
             dev_unseen_w_tokens = list(dev_unseen_w.elements())
@@ -457,6 +457,21 @@ def dict_transpose(iterable_of_dicts):
             result[k].append(v)
     return result
 
+def filter_unks(data, w_vocab, verbose=True):
+    result = Counter()
+    N_unk = 0
+    N = 0
+    for parts, value in data.items():
+        N += value
+        w, *_ = parts
+        if w in w_vocab:
+            result[parts] = value
+        else:
+            N_unk += value
+    if verbose:
+        print("UNK proportion: %s" % str(N_unk/N), file=sys.stderr)
+    return result
+
 def main(vectors_filename,
             train_filename,
             dev_filename=None,
@@ -465,6 +480,7 @@ def main(vectors_filename,
             tie_params=False,
             softmax=False,
             no_encoders=False,
+            include_unk=False,            
             seed=None,
             output_filename=DEFAULT_FILENAME,            
             phi_structure=DEFAULT_STRUCTURE,
@@ -482,14 +498,18 @@ def main(vectors_filename,
     else:
         vocab_words = vectors.word_indices
     print("Support size %d" % len(vocab_words), file=sys.stderr)
-    
+    # TODO: PRE-UNKIFY EVERYTHING
     train_data = rw.read_counts(train_filename, verbose=True)
     if dev_filename:
         dev_data = rw.read_counts(dev_filename, verbose=True)
+        if not include_unk:
+            dev_data = filter_unks(dev_data, vocab_words, verbose=True)
     else:
         dev_data = None
     if test_filename:
         test_data = rw.read_numbers(test_filename)
+        if not include_unk:
+            test_data = filter_unks(test_data, vocab_words, verbose=True)
     else:
         test_data = None
     
@@ -547,9 +567,10 @@ if __name__ == '__main__':
     parser.add_argument("--check_every", type=int, default=DEFAULT_CHECK_EVERY, help="Record progress and check for early stopping every x iterations")
     parser.add_argument("--patience", type=int, default=DEFAULT_PATIENCE, help="Allow n increases in dev loss for early stopping. None means infinite patience. Default None.")
     parser.add_argument("--output_filename", type=str, default=DEFAULT_FILENAME, help="Output filename. If not specified, a default is used which indicates the time the training script was run..")
+    parser.add_argument("--include_unk", action='store_true', help="Include UNK target words in dev and test sets.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for minibatches.")
     args = parser.parse_args()
-    main(args.vectors, args.train, dev_filename=args.dev, test_filename=args.test, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size)
+    main(args.vectors, args.train, dev_filename=args.dev, test_filename=args.test, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size, include_unk=args.include_unk)
 
     
 
