@@ -413,7 +413,6 @@ def train(model, train_data, dev_data=None, test_data=None, batch_size=DEFAULT_B
 
                 if G == 2 and dev_unseen_both_tokens:
                     diagnostic['dev_unseen_both_loss'] = me(dev_unseen_both_tokens).mean().item()
-                    #diagnostic['dev_unseen_both_smoothed_0.5'] = smoothed.surprisal(dev_unseen_both_tokens, 1/2)
                     diagnostic['dev_unseen_both_smoothed_1.0'] = smoothed.surprisal(dev_unseen_both_tokens, 1)
                     diagnostic['dev_unseen_both_backoff_0.25'] = backoff.surprisal(dev_unseen_both_tokens, 1/4, 1)
 
@@ -429,7 +428,6 @@ def train(model, train_data, dev_data=None, test_data=None, batch_size=DEFAULT_B
             if test_data is not None:
                est = loglogit(-me(test_tokens))
                obs = loglogit(test_values)
-               #import pdb; pdb.set_trace()
                diagnostic['test_err'] = ((est - obs)**2).mean().item()
 
             curr_time = datetime.datetime.now()
@@ -455,6 +453,16 @@ def dict_transpose(iterable_of_dicts):
     for d in it:
         for k, v in d.items():
             result[k].append(v)
+    return result
+
+def unkify(data, w_vocab, c_vocab):
+    result = Counter()
+    for parts, value in data.items():
+        new_parts = [
+            UNK if (part == 0 and part not in w_vocab) or part not in c_vocab else part
+            for part in parts
+        ]
+        result[tuple(new_parts)] += value
     return result
 
 def filter_unks(data, w_vocab, verbose=True):
@@ -498,8 +506,8 @@ def main(vectors_filename,
     else:
         vocab_words = vectors.word_indices
     print("Support size %d" % len(vocab_words), file=sys.stderr)
-    # TODO: PRE-UNKIFY EVERYTHING
     train_data = rw.read_counts(train_filename, verbose=True)
+    train_data = unkify(train_data, vocab_words, vectors.word_indices)
     if dev_filename:
         dev_data = rw.read_counts(dev_filename, verbose=True)
         if not include_unk:
