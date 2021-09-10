@@ -18,7 +18,7 @@ import readwrite as rw
 INF = float('inf')
 UNK = "!!!<UNK>!!!"
 
-DEFAULT_NUM_ITER = 50000
+DEFAULT_NUM_ITER = 25000
 DEFAULT_STRUCTURE = str([300, 300, 300])
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_LR = 10 ** -3
