@@ -42,42 +42,55 @@ def loglogit(x, eps=EPSILON):
     return x - torch.log(1 - torch.exp(x - eps))
 
 class AdditiveSmoothing:
-    def __init__(self, counts):
-        self.counts = Counter()
+    def __init__(self, counts, w_vocab, c_vocab):
+        self.counts = unkify(counts, w_vocab, c_vocab)
         self.marginal_counts = Counter()
-        for (w, *c), v in counts.items():
-            c = tuple(c)
-            self.counts[w,c] = v
-            self.marginal_counts[c] += v
-        self.V = len(set(w for w, *_ in self.counts.keys()))
+        for (w, *cs), v in self.counts.items():
+            cs = tuple(cs)
+            self.marginal_counts[cs] += v
+        self.w_vocab = w_vocab
+        self.c_vocab = c_vocab
+
+    @property
+    def V(self):
+        return len(self.w_vocab)
 
     def surprisal(self, xs, alpha):
         def gen():
-            for w, *c in xs:
-                c = tuple(c)
-                numerator = math.log(self.counts[w,c] + alpha)
-                logZ = math.log(self.marginal_counts[c] + alpha*self.V)
+            for w, *cs in xs:
+                cs = tuple(c if c in self.c_vocab else UNK for c in cs)
+                w = w if w in self.w_vocab else UNK
+                numerator = math.log(self.counts[(w,)+cs] + alpha)
+                logZ = math.log(self.marginal_counts[cs] + alpha*self.V)
                 yield logZ - numerator
         return rfutils.mean(gen())
 
 class BackoffSmoothing:
-    def __init__(self, counts):
-        self.counts = counts
+    def __init__(self, counts, w_vocab, c_vocab):
+        self.counts = unkify(counts, w_vocab, c_vocab) # do thei nputs already have c as tuples??
         self.marginal_counts = Counter()
         self.word_counts = Counter()
         self.N = 0
-        for (w, c), v in self.counts.items():
-            self.marginal_counts[c] += v
+        for (w, *cs), v in self.counts.items():
+            cs = tuple(cs)
+            self.marginal_counts[cs] += v
             self.word_counts[w] += v
             self.N += v
-        self.V = len(self.word_counts)
+        self.w_vocab = w_vocab
+        self.c_vocab = c_vocab
+
+    @property
+    def V(self):
+        return len(self.w_vocab)        
         
     def surprisal(self, xs, lamda, alpha):
         def gen():
-            for w, c in xs:
-                if self.marginal_counts[c]:
-                    bigram_prob = self.counts[w,c]
-                    bigram_prob /= self.marginal_counts[c]
+            for w, *cs in xs:
+                cs = tuple(c if c in self.c_vocab else UNK for c in cs)
+                w = w if w in self.w_vocab else UNK                
+                if self.marginal_counts[cs]:
+                    bigram_prob = self.counts[(w,)+cs]
+                    bigram_prob /= self.marginal_counts[cs]
                 else:
                     bigram_prob = 0
                 unigram_smoothed = (self.word_counts[w] + alpha) / (self.N + alpha*self.V)
@@ -341,7 +354,7 @@ def dev_split(train, dev):
         Counter(filter_dict(dev, unseen_both)),
     )
 
-def train(model, train_data, dev_data=None, test_data=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, **kwds):
+def train(model, train_data, dev_data=None, test_data=None, w_vocab=None, c_vocab=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, **kwds):
 
     G = len(rfutils.first(train_data.keys()))    
 
@@ -366,9 +379,9 @@ def train(model, train_data, dev_data=None, test_data=None, batch_size=DEFAULT_B
     old_dev_loss = INF
     excursions = 0
 
-    smoothed = AdditiveSmoothing(train_data)
+    smoothed = AdditiveSmoothing(train_data, w_vocab, c_vocab)
     if G == 2:
-        backoff = BackoffSmoothing(train_data)
+        backoff = BackoffSmoothing(train_data, w_vocab, c_vocab)
 
     first_line = True
     start = datetime.datetime.now()
@@ -459,8 +472,8 @@ def unkify(data, w_vocab, c_vocab):
     result = Counter()
     for parts, value in data.items():
         new_parts = [
-            UNK if (part == 0 and part not in w_vocab) or part not in c_vocab else part
-            for part in parts
+            UNK if (i == 0 and part not in w_vocab) or part not in c_vocab else part
+            for i, part in enumerate(parts)
         ]
         result[tuple(new_parts)] += value
     return result
@@ -551,7 +564,7 @@ def main(vectors_filename,
     else:
         raise ValueError("Only works for unigrams or bigrams, but %d-grams detected in training data" % G)
         
-    model, diagnostics = train(model, train_data, dev_data=dev_data, test_data=test_data, **kwds)
+    model, diagnostics = train(model, train_data, dev_data=dev_data, test_data=test_data, w_vocab=vocab_words, c_vocab=vectors.word_indices, **kwds)
     torch.save(model, output_filename)
     return model
 
