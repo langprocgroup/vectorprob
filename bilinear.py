@@ -15,6 +15,8 @@ import opt_einsum
 import feedforward as ff
 import readwrite as rw
 
+DEBUG = False
+
 INF = float('inf')
 UNK = "!!!<UNK>!!!"
 
@@ -26,7 +28,7 @@ DEFAULT_ACTIVATION = "relu"
 DEFAULT_CHECK_EVERY = 100
 DEFAULT_PATIENCE = None
 DEFAULT_DROPOUT = 0.0
-DEFAULT_FILENAME = "output/model_%s.pt" % str(datetime.datetime.now()).split(".")[0].replace(" ", "_")
+DEFAULT_FILENAME = None#"output/model_%s.pt" % str(datetime.datetime.now()).split(".")[0].replace(" ", "_")
 EPSILON = 10 ** -7
 
 ACTIVATIONS = {
@@ -117,23 +119,23 @@ class WordVectors(torch.nn.Module):
             self.vectors = torch.nn.Parameter(self.vectors)
         self.unk_vector = self.vectors[self.unk_index]
 
-    def indices_of(self, words, vocab=None):
+    def indices_of(self, words, vocab=None, unique=False):
         indices = [
             self.word_indices[w] if (vocab is None or w in vocab) and w in self.word_indices else self.unk_index
             for w in words
         ]
-        return indices
-
-    def embed_words(self, words, vocab=None, unique=False):
-        indices = self.indices_of(words, vocab=vocab)
         if unique:
             indices = list(set(indices))
-        indices_t = torch.LongTensor(indices).to(self.device)
-        return self.vectors[indices_t]
+        return torch.LongTensor(indices).to(self.device)
+
+    def embed_words(self, words, vocab=None):
+        indices = self.indices_of(words, vocab=vocab)
+        return self.vectors[indices]
 
 class MarginalLogLinear(torch.nn.Module):
     def __init__(self, w_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
+        self.device = device        
         self.vectors = vectors
         if not w_encoder_structure:
             self.w_encoder = identity
@@ -144,76 +146,36 @@ class MarginalLogLinear(torch.nn.Module):
         self.linear = torch.nn.Linear(K, 1, bias=True, device=device)
         if support is None:
             self.support = self.vectors.word_indices
-            self.support_indices = ...
+            self.support_indices = ... # extract everything
         else:
             self.support = set(support) | {UNK}
-            self.support_indices = torch.LongTensor(list(set(self.vectors.indices_of(self.support)))).to(self.device)            
-        self.device = device
+            self.support_indices = self.vectors.indices_of(self.support, unique=True)
 
     def forward(self, words):
+        if isinstance(words, torch.Tensor):
+            return self.forward_from_indices(words)
+        else:
+            return self.forward_from_words(words)
+
+    def forward_from_words(self, words):
         """
         This function computes < weights | w_i > - \log \sum_w \exp < weights | w > 
         """
         only_words = [w for w, *_ in words]
         batch = self.vectors.embed_words(only_words, vocab=self.support) # shape B x D
+        return self.forward_from_vectors(batch)
+
+    def forward_from_indices(self, indices):
+        only_words = indices[:,0]
+        batch = self.vectors.vectors[indices]
+        return self.forward_from_vectors(batch)
+
+    def forward_from_vectors(self, batch):
         energy = self.linear(self.w_encoder(batch)).squeeze(-1) # shape B
         support_vectors = self.vectors.vectors[self.support_indices]
         logZ = self.linear(self.w_encoder(support_vectors)).squeeze(-1).logsumexp(-1) # shape 1, same across batch
         return logZ - energy
 
-class ConditionalLogLinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, c_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
-        super().__init__()
-        self.vectors = vectors
-        
-        if not w_encoder_structure:
-            self.w_encoder = identity
-            K = self.vectors.D
-        else:
-            self.w_encoder = ff.FeedForward(
-                w_encoder_structure,
-                activation=ACTIVATIONS[activation],
-                dropout=dropout,
-                device=device
-            )
-            K = w_encoder_structure[-1]
-        if c_encoder_structure is None:
-            self.c_encoder = self.w_encoder
-            L = K
-        else:
-            self.c_encoder = ff.FeedForward(
-                c_encoder_structure,
-                activation=ACTIVATIONS[activation],
-                dropout=dropout,
-                device=device
-            )
-            L = c_encoder_structure[-1]
-        self.linear = torch.nn.Linear(K + L, 1, device=device)
-        if support is None:
-            self.support = self.vectors.word_indices
-            self.support_vectors = self.vectors.vectors
-        else:
-            self.support = set(support) | {UNK}
-            self.support_vectors = self.vectors.embed_words(self.support, unique=True).contiguous()
-        self.device = device
-            
-
-    def forward(self, pairs):
-        raise NotImplementedError
-        ws, cs = zip(*pairs)
-        v_w = self.vectors.embed_words(ws, vocab=self.support)
-        v_c = self.vectors.embed_words(cs)
-        h_w = self.w_encoder(v_w) # shape B x K
-        h_c = self.c_encoder(v_c) # shape B x L
-        h_wc = torch.cat([h_w, h_c], dim=-1) # shape B x (K + L)
-        h_v = self.w_encoder(self.support_vectors) # shape V x K
-        h_vc = ... # shape B x V x (K + L): need "b c, v w -> b v (c + w)" ugh, need to use meshgrid or something? ugly
-        # first step b c, v w -> b c v w 
-        # energy = <w_i | A | c_i>
-        energy = self.linear(h_wc).squeeze(-1) # shape B
-        logZ = self.linear(self.w_encoder(self.support_vectors)).squeeze(-1).logsumexp(-1) # shape 1, same across batch
-        
-        
 class ConditionalSoftmax(torch.nn.Module):
     def __init__(self, c_encoder_structure, vectors, support, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
@@ -240,7 +202,7 @@ class ConditionalSoftmax(torch.nn.Module):
             self.support = self.vectors.word_indices
         else:
             self.support = set(support) | {UNK}
-        self.support_indices = {w:i for i, w in enumerate(self.support)}
+        self.support_indices_lookup = {w:i for i, w in enumerate(self.support)}
         self.device = device
 
     def forward(self, pairs):
@@ -248,7 +210,7 @@ class ConditionalSoftmax(torch.nn.Module):
         c_vectors = self.vectors.embed_words(cs)
         outputs = self.net(c_vectors) # shape B x V, logspace normalized
         w_indices = torch.LongTensor([[
-            self.support_indices[w] if w in self.support_indices else self.support_indices[UNK]
+            self.support_indices_lookup[w] if w in self.support_indices_lookup else self.support_indices_lookup[UNK]
             for w in ws
         ]]).to(self.device)
         logprobs = torch.gather(outputs, -1, w_indices).squeeze(-2) # shape B
@@ -286,29 +248,45 @@ class ConditionalLogBilinear(torch.nn.Module):
         self.w_linear = torch.nn.Linear(K, 1, bias=False, device=device)
         if support is None:
             self.support = self.vectors.word_indices
-            self.support_indices = ...#vectors = self.vectors.vectors
+            self.support_indices = ... # extract everything
         else:
             self.support = set(support) | {UNK}
-            self.support_indices = torch.LongTensor(list(set(self.vectors.indices_of(self.support)))).to(self.device)
-            #self.support_vectors = self.vectors.vectors#embed_words(self.support, unique=True)
+            self.support_indices = self.vectors.indices_of(self.support, unique=True)
 
-    def forward(self, pairs):
+    def forward(self, batch):
+        if isinstance(batch, torch.Tensor):
+            return self.forward_from_indices(batch)
+        else:
+            return self.forward_from_words(batch)
+
+    def forward_from_words(self, pairs):
         """ Batch is an iterable of <w, c>.
         This function computes <w_i | A | c_i> - \log \sum_w \exp <w | A | c_i> """
         ws, cs = zip(*pairs)
         v_w = self.vectors.embed_words(ws, vocab=self.support)
         v_c = self.vectors.embed_words(cs)
+        return self.forward_from_vectors(v_w, v_c)
+
+    def forward_from_indices(self, indices):
+        ws, cs = indices.T
+        v_w = self.vectors.vectors[ws]
+        v_c = self.vectors.vectors[cs]
+        return self.forward_from_vectors(v_w, v_c)
+
+    def forward_from_vectors(self, v_w, v_c):
         h_w = self.w_encoder(v_w) # shape B x K
         h_c = self.c_encoder(v_c) # shape B x L
-        #support_vectors = self.vectors.embed_words(self.support, unique=True)
         support_vectors = self.vectors.vectors[self.support_indices]
-        h_v = self.w_encoder(support_vectors) # shape V x L
+        h_v = self.w_encoder(support_vectors) # shape V x L, make contiguous?
         # energy = <w | A | c> + <B|w> + <C|c> + D; but <C|c>+D cancels out so not included
         energy = (self.bilinear(h_w, h_c) + self.w_linear(h_w)).squeeze(-1) # shape B
         # logZ = ln \sum_w exp <w | A | c_i> -- numerical b
-        A = self.bilinear.weight.squeeze(0)
+        A = self.bilinear.weight.squeeze(0) # are h_v and h_c in the right order below?
         logZ = (opt_einsum.contract("vi,ij,bj->bv", h_v, A, h_c) + self.w_linear(h_v).T).logsumexp(-1)
         result = logZ - energy
+        if DEBUG:
+            if (result < -.1).any():
+                import pdb; pdb.set_trace()
         return result
 
 def sample_from_histogram(histogram, k):
@@ -323,19 +301,51 @@ def sample_from_histogram(histogram, k):
         yield sample
         counts[indices[sample]] -= 1
 
-def minibatches(elements, k, verbose=True):
-    elements = list(elements)
-    for j in itertools.count():
-        these_elements = elements.copy()
-        random.shuffle(these_elements)
-        while these_elements:
-            this_sample = []
-            for i in range(k):
-                if these_elements:
-                    this_sample.append(these_elements.pop())
-            yield this_sample
-        if verbose:
-            print("Finished epoch %d" % j, file=sys.stderr)
+
+class WordData:
+    def __init__(self, elements):
+        self.elements = list(elements)
+        self.arity = len(rfutils.first(self.elements))
+        self.N = len(self.elements)
+        
+    def minibatches(self, k, verbose=True):
+        for j in itertools.count():
+            these_elements = self.elements.copy()
+            random.shuffle(these_elements)
+            while these_elements:
+                this_sample = []
+                for i in range(k):
+                    if these_elements:
+                        this_sample.append(these_elements.pop())
+                    else:
+                        break
+                yield this_sample
+            if verbose:
+                print("Finished epoch %d" % j, file=sys.stderr)
+
+class IndexData:
+    def __init__(self, elements, model):
+        print("Processing training data...", file=sys.stderr, end=" ")
+        wss = zip(*elements)
+        self.indices = torch.stack([
+            model.vectors.indices_of(ws) for ws in wss
+        ]).T
+        print("Done.", file=sys.stderr)
+        self.N, self.arity = self.indices.shape
+        self.device = model.device
+
+    def minibatches(self, k, verbose=True):
+        for j in itertools.count():
+            perm = torch.randperm(self.N, device=self.device)
+            for b in itertools.count():
+                start = k*b
+                end = start + k
+                if start >= self.N:
+                    break
+                the_slice = perm[start:end]
+                yield self.indices[the_slice] # make contiguous?
+            if verbose:
+                print("Finished epoch %d" % j, file=sys.stderr)                
 
 def filter_dict(d, ok_keys):
     return {k:v for k, v in d.items() if k in ok_keys}
@@ -359,11 +369,15 @@ def dev_split(train, dev):
         Counter(filter_dict(dev, unseen_both)),
     )
 
-def train(model, train_data, dev_data=None, test_data=None, w_vocab=None, c_vocab=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, **kwds):
+def train(model, train_data, dev_data=None, test_data=None, w_vocab=None, c_vocab=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, clip=None, data_on_device=False, **kwds):
 
-    G = len(rfutils.first(train_data.keys()))    
-
-    train_data_gen = minibatches(list(train_data.elements()), batch_size)    
+    if data_on_device and not isinstance(model, ConditionalSoftmax):
+        train_data_minibatcher = IndexData(train_data.elements(), model)
+    else:
+        train_data_minibatcher = WordData(train_data.elements())
+        
+    G = train_data_minibatcher.arity
+    train_data_gen = train_data_minibatcher.minibatches(batch_size)
     if dev_data:
         dev_tokens = list(dev_data.elements())
 
@@ -384,18 +398,22 @@ def train(model, train_data, dev_data=None, test_data=None, w_vocab=None, c_voca
     old_dev_loss = INF
     excursions = 0
 
+    print("Initializing baselines...", file=sys.stderr, end=" ")
     smoothed = AdditiveSmoothing(train_data, w_vocab, c_vocab)
     if G == 2:
         backoff = BackoffSmoothing(train_data, w_vocab, c_vocab)
+    print("Done.", file=sys.stderr)
 
     first_line = True
     start = datetime.datetime.now()
     for i in range(num_iter):
-        train_batch = list(next(train_data_gen))
+        train_batch = next(train_data_gen)
         
         opt.zero_grad()            
         loss = model(train_batch).mean()
         loss.backward()
+        if clip is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
         opt.step()
 
         if check_every is not None and i % check_every == 0:
@@ -538,7 +556,8 @@ def main(vectors_filename,
             test_data = filter_unks(test_data, vocab_words, verbose=True)
     else:
         test_data = None
-    
+
+    print("Initializing model...", file=sys.stderr, end=" ")
     G = len(rfutils.first(train_data.keys()))
     if G == 1:
         model = MarginalLogLinear(
@@ -568,9 +587,11 @@ def main(vectors_filename,
             )
     else:
         raise ValueError("Only works for unigrams or bigrams, but %d-grams detected in training data" % G)
+    print("Done.", file=sys.stderr)
         
     model, diagnostics = train(model, train_data, dev_data=dev_data, test_data=test_data, w_vocab=vocab_words, c_vocab=vectors.word_indices, **kwds)
-    torch.save(model, output_filename)
+    if output_filename is not None:
+        torch.save(model, output_filename)
     return model
 
 if __name__ == '__main__':
@@ -594,10 +615,12 @@ if __name__ == '__main__':
     parser.add_argument("--patience", type=int, default=DEFAULT_PATIENCE, help="Allow n increases in dev loss for early stopping. None means infinite patience. Default None.")
     parser.add_argument("--output_filename", type=str, default=DEFAULT_FILENAME, help="Output filename. If not specified, a default is used which indicates the time the training script was run..")
     parser.add_argument("--include_unk", action='store_true', help="Include UNK target words in dev and test sets.")
+    parser.add_argument("--data_on_device", action='store_true', help="Store training data on GPU (faster for big datasets but uses a lot of GPU memory).")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for minibatches.")
     parser.add_argument("--finetune", action="store_true", help="Finetune word vectors.")
+    parser.add_argument('--clip', type=float, default=None, help='gradient clipping')
     args = parser.parse_args()
-    main(args.vectors, args.train, dev_filename=args.dev, test_filename=args.test, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size, include_unk=args.include_unk, finetune=args.finetune)
+    main(args.vectors, args.train, dev_filename=args.dev, test_filename=args.test, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size, include_unk=args.include_unk, finetune=args.finetune, clip=args.clip, data_on_device=args.data_on_device)
 
     
 
