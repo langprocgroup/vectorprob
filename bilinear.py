@@ -15,7 +15,7 @@ import opt_einsum
 import feedforward as ff
 import readwrite as rw
 
-DEBUG = True
+DEBUG = False
 
 INF = float('inf')
 UNK = "!!!<UNK>!!!"
@@ -36,9 +36,6 @@ ACTIVATIONS = {
 }
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-def identity(x):
-    return x
 
 def loglogit(x, eps=EPSILON):
     return x - torch.log(1 - torch.exp(x - eps))
@@ -136,7 +133,7 @@ class MarginalLogLinear(torch.nn.Module):
         self.device = device        
         self.vectors = vectors
         if not w_encoder_structure:
-            self.w_encoder = identity
+            self.w_encoder = torch.nn.Identity()
             K = self.vectors.D
         else:
             self.w_encoder = ff.FeedForward(w_encoder_structure, activation=ACTIVATIONS[activation], dropout=dropout, device=device)
@@ -168,10 +165,11 @@ class MarginalLogLinear(torch.nn.Module):
 
     def forward_from_indices(self, ws):
         support_vectors = self.vectors.vectors[self.support_to_vector]
-        energy = self.linear(self.w_encoder(support_vectors)).squeeze(-1) # shape B
+        energy = self.linear(self.w_encoder(support_vectors)).squeeze(-1) # V
+        logZ = energy.logsumexp(-1) # 1
         w_support_indices = self.vector_to_support[ws] # B        
-        w_energy = energy[w_support_indices]
-        return logZ - w_energy
+        w_energy = energy[w_support_indices] # B
+        return logZ - w_energy # B
 
 class ConditionalSoftmax(torch.nn.Module):
     def __init__(self, c_encoder_structure, vectors, support, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
@@ -199,7 +197,7 @@ class ConditionalSoftmax(torch.nn.Module):
         if support is None:
             self.support = list(self.vectors.word_indices)
             self.word_to_support = {w:i for i, w in enumerate(self.support)}
-            self.support_to_vector = torch.arange(len(self.word_to_support), device=self.device) # extract everything
+            self.support_to_vector = torch.arange(len(self.word_to_support), device=self.device) 
             self.vector_to_support = self.support_to_vector
         else:
             self.support = list(set(support) & set(self.vectors.word_indices) | {UNK})
@@ -235,7 +233,7 @@ class ConditionalLogBilinear(torch.nn.Module):
         self.vectors = vectors
         
         if w_encoder_structure is None:
-            self.w_encoder = identity
+            self.w_encoder = torch.nn.Identity()
             K = self.vectors.D
         else:
             self.w_encoder = ff.FeedForward(
