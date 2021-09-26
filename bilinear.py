@@ -144,11 +144,18 @@ class MarginalLogLinear(torch.nn.Module):
         self.linear = torch.nn.Linear(K, 1, bias=False, device=device)
         torch.nn.init.xavier_uniform_(self.linear.weight)
         if support is None:
-            self.support = self.vectors.word_indices
-            self.support_indices = ... # extract everything
+            self.support = list(self.vectors.word_indices)
+            self.word_to_support = {w:i for i, w in enumerate(self.support)}
+            self.support_to_vector = torch.arange(len(self.word_to_support), device=self.device) # extract everything
+            self.vector_to_support = self.support_to_vector
         else:
-            self.support = set(support) & set(self.vectors.word_indices) | {UNK}            
-            self.support_indices = self.vectors.indices_of(self.support)                       
+            self.support = list(set(support) & set(self.vectors.word_indices) | {UNK})
+            self.word_to_support = {w:i for i, w in enumerate(self.support)} # support index -> word
+            self.support_to_vector = self.vectors.indices_of(self.support) # support index -> vector index
+            self.vector_to_support = torch.LongTensor([
+                self.word_to_support[w if w in self.word_to_support else UNK]
+                for w in self.vectors.word_indices
+            ]).to(self.device) # vector index -> support index        
 
     def forward(self, words):
         if isinstance(words, torch.Tensor):
@@ -159,16 +166,17 @@ class MarginalLogLinear(torch.nn.Module):
             indices = self.vectors.indices_of(only_words, vocab=self.support) # shape B x D
             return self.forward_from_indices(indices)
 
-    def forward_from_indices(self, indices):
-        v_w = self.vectors.vectors[indices]
-        energy = self.linear(self.w_encoder(v_w)).squeeze(-1) # shape B
-        support_vectors = self.vectors.vectors[self.support_indices]
-        logZ = self.linear(self.w_encoder(support_vectors)).squeeze(-1).logsumexp(-1) # shape 1, same across batch
-        return logZ - energy
+    def forward_from_indices(self, ws):
+        support_vectors = self.vectors.vectors[self.support_to_vector]
+        energy = self.linear(self.w_encoder(support_vectors)).squeeze(-1) # shape B
+        w_support_indices = self.vector_to_support[ws] # B        
+        w_energy = energy[w_support_indices]
+        return logZ - w_energy
 
 class ConditionalSoftmax(torch.nn.Module):
     def __init__(self, c_encoder_structure, vectors, support, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
         super().__init__()
+        self.device = device        
         self.vectors = vectors
         V = len(support)
         if c_encoder_structure is None:
@@ -190,21 +198,34 @@ class ConditionalSoftmax(torch.nn.Module):
             )
         if support is None:
             self.support = list(self.vectors.word_indices)
+            self.word_to_support = {w:i for i, w in enumerate(self.support)}
+            self.support_to_vector = torch.arange(len(self.word_to_support), device=self.device) # extract everything
+            self.vector_to_support = self.support_to_vector
         else:
             self.support = list(set(support) & set(self.vectors.word_indices) | {UNK})
-            self.support_indices = self.vectors.indices_of(self.support)                        
-        self.support_indices_lookup = {w:i for i, w in enumerate(self.support)}
-        self.device = device
+            self.word_to_support = {w:i for i, w in enumerate(self.support)} # support index -> word
+            self.support_to_vector = self.vectors.indices_of(self.support) # support index -> vector index
+            self.vector_to_support = torch.LongTensor([
+                self.word_to_support[w if w in self.word_to_support else UNK]
+                for w in self.vectors.word_indices
+            ]).to(self.device) # vector index -> support index
 
-    def forward(self, pairs):
-        ws, cs = zip(*pairs)
-        c_vectors = self.vectors.embed_words(cs)
-        outputs = self.net(c_vectors) # shape B x V, logspace normalized
-        w_indices = torch.LongTensor([[
-            self.support_indices_lookup[w] if w in self.support_indices_lookup else self.support_indices_lookup[UNK]
-            for w in ws
-        ]]).to(self.device)
-        logprobs = torch.gather(outputs, -1, w_indices).squeeze(-2) # shape B
+    def forward(self, batch):
+        if isinstance(batch, torch.Tensor):
+            # assumes UNKs already handled
+            i_w, i_c = batch.T            
+            return self.forward_from_indices(i_w, i_c)
+        else:
+            ws, cs = zip(*batch)
+            i_w = self.vectors.indices_of(ws, vocab=self.word_to_support)
+            i_c = self.vectors.indices_of(cs)
+            return self.forward_from_indices(i_w, i_c)                        
+
+    def forward_from_indices(self, ws, cs):
+        v_c = self.vectors.vectors[cs] # B x E
+        outputs = self.net(v_c) # B x V, log p(w|c)
+        w_support_indices = self.vector_to_support[ws]
+        logprobs = outputs.T[w_support_indices].diag()
         return -logprobs
 
 class ConditionalLogBilinear(torch.nn.Module):
@@ -240,11 +261,18 @@ class ConditionalLogBilinear(torch.nn.Module):
         torch.nn.init.xavier_uniform_(self.bilinear.weight)
         torch.nn.init.xavier_uniform_(self.w_linear.weight)
         if support is None:
-            self.support = self.vectors.word_indices
-            self.support_indices = ... # extract everything
+            self.support = list(self.vectors.word_indices)
+            self.word_to_support = {w:i for i, w in enumerate(self.support)}
+            self.support_to_vector = torch.arange(len(self.word_to_support), device=self.device) # extract everything
+            self.vector_to_support = self.support_to_vector
         else:
-            self.support = set(support) & set(self.vectors.word_indices) | {UNK}
-            self.support_indices = self.vectors.indices_of(self.support)            
+            self.support = list(set(support) & set(self.vectors.word_indices) | {UNK})
+            self.word_to_support = {w:i for i, w in enumerate(self.support)} # support index -> word
+            self.support_to_vector = self.vectors.indices_of(self.support) # support index -> vector index
+            self.vector_to_support = torch.LongTensor([
+                self.word_to_support[w if w in self.word_to_support else UNK]
+                for w in self.vectors.word_indices
+            ]).to(self.device) # vector index -> support index
 
     def forward(self, batch):
         if isinstance(batch, torch.Tensor):
@@ -253,23 +281,22 @@ class ConditionalLogBilinear(torch.nn.Module):
             return self.forward_from_indices(i_w, i_c)
         else:
             ws, cs = zip(*batch)
-            i_w = self.vectors.indices_of(ws, vocab=self.support)
+            i_w = self.vectors.indices_of(ws, vocab=self.word_to_support)
             i_c = self.vectors.indices_of(cs)
             return self.forward_from_indices(i_w, i_c)            
 
     def forward_from_indices(self, ws, cs):
-        v_w = self.vectors.vectors[ws]
-        v_c = self.vectors.vectors[cs]
-        h_w = self.w_encoder(v_w) # shape B x K
-        h_c = self.c_encoder(v_c) # shape B x L
-        support_vectors = self.vectors.vectors[self.support_indices]
-        h_v = self.w_encoder(support_vectors) # shape V x L, make contiguous?
+        v_c = self.vectors.vectors[cs] # B x E
+        h_c = self.c_encoder(v_c) # B x L
+        support_vectors = self.vectors.vectors[self.support_to_vector] # V x E
+        h_v = self.w_encoder(support_vectors) # V x K
         # energy = <w | A | c> + <B | w>
-        energy = (self.bilinear(h_w, h_c) + self.w_linear(h_w)).squeeze(-1) # shape B
-        # logZ = ln \sum_w exp <w | A | c_i> + <B | w>
-        A = self.bilinear.weight.squeeze(0)         
-        logZ = (opt_einsum.contract("vi,ij,bj->bv", h_v, A, h_c) + self.w_linear(h_v).T).logsumexp(-1)
-        result = logZ - energy
+        A = self.bilinear.weight.squeeze(0) # K x L              
+        energy = opt_einsum.contract("vi,ij,bj->bv", h_v, A, h_c) + self.w_linear(h_v).T # B x V
+        w_support_indices = self.vector_to_support[ws] # B
+        w_energy = energy.T[w_support_indices].diag()
+        logZ = energy.logsumexp(-1) # B        
+        result = logZ - w_energy    
         if DEBUG:
             if (result < -.1).any():
                 import pdb; pdb.set_trace()
@@ -357,7 +384,7 @@ def dev_split(train, dev):
 
 def train(model, train_data, dev_data=None, test_data=None, w_vocab=None, c_vocab=None, batch_size=DEFAULT_BATCH_SIZE, num_iter=DEFAULT_NUM_ITER, check_every=DEFAULT_CHECK_EVERY, patience=DEFAULT_PATIENCE, clip=None, data_on_device=False, **kwds):
 
-    if data_on_device and not isinstance(model, ConditionalSoftmax):
+    if data_on_device:
         train_data_minibatcher = IndexData(train_data.elements(), model)
     else:
         train_data_minibatcher = WordData(train_data.elements())
@@ -527,7 +554,7 @@ def main(vectors_filename,
         vocab_words = set(rw.read_words(vocab)) & set(vectors.word_indices) | {UNK}
     else:
         vocab_words = vectors.word_indices
-    print("Support size = %d + 1" % len(vocab_words) - 1, file=sys.stderr)
+    print("Support size = %d + 1" % (len(vocab_words) - 1), file=sys.stderr)
     train_data = rw.read_counts(train_filename, verbose=True)
     train_data = unkify(train_data, vocab_words, vectors.word_indices)
     if dev_filename:
