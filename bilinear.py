@@ -15,7 +15,7 @@ import opt_einsum
 import feedforward as ff
 import readwrite as rw
 
-DEBUG = False
+DEBUG = True
 
 INF = float('inf')
 UNK = "!!!<UNK>!!!"
@@ -119,13 +119,11 @@ class WordVectors(torch.nn.Module):
             self.vectors = torch.nn.Parameter(self.vectors)
         self.unk_vector = self.vectors[self.unk_index]
 
-    def indices_of(self, words, vocab=None, unique=False):
+    def indices_of(self, words, vocab=None):
         indices = [
             self.word_indices[w] if (vocab is None or w in vocab) and w in self.word_indices else self.unk_index
             for w in words
         ]
-        if unique:
-            indices = list(set(indices))
         return torch.LongTensor(indices).to(self.device)
 
     def embed_words(self, words, vocab=None):
@@ -143,35 +141,27 @@ class MarginalLogLinear(torch.nn.Module):
         else:
             self.w_encoder = ff.FeedForward(w_encoder_structure, activation=ACTIVATIONS[activation], dropout=dropout, device=device)
             K = w_encoder_structure[-1]
-        self.linear = torch.nn.Linear(K, 1, bias=True, device=device)
+        self.linear = torch.nn.Linear(K, 1, bias=False, device=device)
+        torch.nn.init.xavier_uniform_(self.linear.weight)
         if support is None:
             self.support = self.vectors.word_indices
             self.support_indices = ... # extract everything
         else:
-            self.support = set(support) | {UNK}
-            self.support_indices = self.vectors.indices_of(self.support, unique=True)
+            self.support = set(support) & set(self.vectors.word_indices) | {UNK}            
+            self.support_indices = self.vectors.indices_of(self.support)                       
 
     def forward(self, words):
         if isinstance(words, torch.Tensor):
-            return self.forward_from_indices(words)
+            # assumes UNKs already handled
+            return self.forward_from_indices(words[:, 0])
         else:
-            return self.forward_from_words(words)
-
-    def forward_from_words(self, words):
-        """
-        This function computes < weights | w_i > - \log \sum_w \exp < weights | w > 
-        """
-        only_words = [w for w, *_ in words]
-        batch = self.vectors.embed_words(only_words, vocab=self.support) # shape B x D
-        return self.forward_from_vectors(batch)
+            only_words = [w for w, *_ in words]
+            indices = self.vectors.indices_of(only_words, vocab=self.support) # shape B x D
+            return self.forward_from_indices(indices)
 
     def forward_from_indices(self, indices):
-        only_words = indices[:,0]
-        batch = self.vectors.vectors[indices]
-        return self.forward_from_vectors(batch)
-
-    def forward_from_vectors(self, batch):
-        energy = self.linear(self.w_encoder(batch)).squeeze(-1) # shape B
+        v_w = self.vectors.vectors[indices]
+        energy = self.linear(self.w_encoder(v_w)).squeeze(-1) # shape B
         support_vectors = self.vectors.vectors[self.support_indices]
         logZ = self.linear(self.w_encoder(support_vectors)).squeeze(-1).logsumexp(-1) # shape 1, same across batch
         return logZ - energy
@@ -199,9 +189,10 @@ class ConditionalSoftmax(torch.nn.Module):
                 device=device,
             )
         if support is None:
-            self.support = self.vectors.word_indices
+            self.support = list(self.vectors.word_indices)
         else:
-            self.support = set(support) | {UNK}
+            self.support = list(set(support) & set(self.vectors.word_indices) | {UNK})
+            self.support_indices = self.vectors.indices_of(self.support)                        
         self.support_indices_lookup = {w:i for i, w in enumerate(self.support)}
         self.device = device
 
@@ -246,42 +237,37 @@ class ConditionalLogBilinear(torch.nn.Module):
             L = c_encoder_structure[-1]
         self.bilinear = torch.nn.Bilinear(K, L, 1, bias=False, device=device)
         self.w_linear = torch.nn.Linear(K, 1, bias=False, device=device)
+        torch.nn.init.xavier_uniform_(self.bilinear.weight)
+        torch.nn.init.xavier_uniform_(self.w_linear.weight)
         if support is None:
             self.support = self.vectors.word_indices
             self.support_indices = ... # extract everything
         else:
-            self.support = set(support) | {UNK}
-            self.support_indices = self.vectors.indices_of(self.support, unique=True)
+            self.support = set(support) & set(self.vectors.word_indices) | {UNK}
+            self.support_indices = self.vectors.indices_of(self.support)            
 
     def forward(self, batch):
         if isinstance(batch, torch.Tensor):
-            return self.forward_from_indices(batch)
+            # assumes UNKs already handled
+            i_w, i_c = batch.T            
+            return self.forward_from_indices(i_w, i_c)
         else:
-            return self.forward_from_words(batch)
+            ws, cs = zip(*batch)
+            i_w = self.vectors.indices_of(ws, vocab=self.support)
+            i_c = self.vectors.indices_of(cs)
+            return self.forward_from_indices(i_w, i_c)            
 
-    def forward_from_words(self, pairs):
-        """ Batch is an iterable of <w, c>.
-        This function computes <w_i | A | c_i> - \log \sum_w \exp <w | A | c_i> """
-        ws, cs = zip(*pairs)
-        v_w = self.vectors.embed_words(ws, vocab=self.support)
-        v_c = self.vectors.embed_words(cs)
-        return self.forward_from_vectors(v_w, v_c)
-
-    def forward_from_indices(self, indices):
-        ws, cs = indices.T
+    def forward_from_indices(self, ws, cs):
         v_w = self.vectors.vectors[ws]
         v_c = self.vectors.vectors[cs]
-        return self.forward_from_vectors(v_w, v_c)
-
-    def forward_from_vectors(self, v_w, v_c):
         h_w = self.w_encoder(v_w) # shape B x K
         h_c = self.c_encoder(v_c) # shape B x L
         support_vectors = self.vectors.vectors[self.support_indices]
         h_v = self.w_encoder(support_vectors) # shape V x L, make contiguous?
-        # energy = <w | A | c> + <B|w> + <C|c> + D; but <C|c>+D cancels out so not included
+        # energy = <w | A | c> + <B | w>
         energy = (self.bilinear(h_w, h_c) + self.w_linear(h_w)).squeeze(-1) # shape B
-        # logZ = ln \sum_w exp <w | A | c_i> -- numerical b
-        A = self.bilinear.weight.squeeze(0) # are h_v and h_c in the right order below?
+        # logZ = ln \sum_w exp <w | A | c_i> + <B | w>
+        A = self.bilinear.weight.squeeze(0)         
         logZ = (opt_einsum.contract("vi,ij,bj->bv", h_v, A, h_c) + self.w_linear(h_v).T).logsumexp(-1)
         result = logZ - energy
         if DEBUG:
@@ -538,10 +524,10 @@ def main(vectors_filename,
     vectors_dict = rw.read_vectors(vectors_filename)
     vectors = WordVectors(vectors_dict, device=DEVICE, finetune=finetune)
     if vocab:
-        vocab_words = set(rw.read_words(vocab)) | {UNK}
+        vocab_words = set(rw.read_words(vocab)) & set(vectors.word_indices) | {UNK}
     else:
         vocab_words = vectors.word_indices
-    print("Support size %d" % len(vocab_words), file=sys.stderr)
+    print("Support size = %d + 1" % len(vocab_words) - 1, file=sys.stderr)
     train_data = rw.read_counts(train_filename, verbose=True)
     train_data = unkify(train_data, vocab_words, vectors.word_indices)
     if dev_filename:
