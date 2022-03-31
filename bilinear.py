@@ -143,7 +143,7 @@ class WordVectors(torch.nn.Module):
         return self.vectors[indices]
 
 class MarginalLogLinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
+    def __init__(self, w_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, device=DEVICE, **kwds):
         super().__init__()
         self.device = device        
         self.vectors = vectors
@@ -151,7 +151,7 @@ class MarginalLogLinear(torch.nn.Module):
             self.w_encoder = torch.nn.Identity()
             K = self.vectors.D
         else:
-            self.w_encoder = ff.FeedForward(w_encoder_structure, activation=ACTIVATIONS[activation], dropout=dropout, device=device)
+            self.w_encoder = ff.FeedForward(w_encoder_structure, activation=ACTIVATIONS[activation], device=device, **kwds)
             K = w_encoder_structure[-1]
         self.linear = torch.nn.Linear(K, 1, bias=False, device=device)
         torch.nn.init.xavier_uniform_(self.linear.weight)
@@ -187,7 +187,7 @@ class MarginalLogLinear(torch.nn.Module):
         return logZ - w_energy # B
 
 class ConditionalSoftmax(torch.nn.Module):
-    def __init__(self, c_encoder_structure, vectors, support, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
+    def __init__(self, c_encoder_structure, vectors, support, activation=DEFAULT_ACTIVATION, device=DEVICE, **kwds):
         super().__init__()
         self.device = device        
         self.vectors = vectors
@@ -196,18 +196,18 @@ class ConditionalSoftmax(torch.nn.Module):
             self.net = ff.FeedForward(
                 [self.vectors.D, V],
                 activation=None,
-                dropout=dropout,
                 transform=torch.nn.LogSoftmax(-1),
                 device=device,
+                **kwds
             )
         else:
             structure = tuple(c_encoder_structure) + (V,)
             self.net = ff.FeedForward(
                 structure,
                 activation=ACTIVATIONS[activation],
-                dropout=dropout,
                 transform=torch.nn.LogSoftmax(-1),
                 device=device,
+                **kwds
             )
         if support is None:
             self.support = list(self.vectors.word_indices)
@@ -243,7 +243,7 @@ class ConditionalSoftmax(torch.nn.Module):
         return -logprobs
 
 class ConditionalLogBilinear(torch.nn.Module):
-    def __init__(self, w_encoder_structure, c_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, dropout=DEFAULT_DROPOUT, device=DEVICE):
+    def __init__(self, w_encoder_structure, c_encoder_structure, vectors, support=None, activation=DEFAULT_ACTIVATION, device=DEVICE, **kwds):
         super().__init__()
         self.device = device
         self.vectors = vectors
@@ -255,8 +255,8 @@ class ConditionalLogBilinear(torch.nn.Module):
             self.w_encoder = ff.FeedForward(
                 w_encoder_structure,
                 activation=ACTIVATIONS[activation],
-                dropout=dropout,
-                device=device
+                device=device,
+                **kwds
             )
             K = w_encoder_structure[-1]
         if c_encoder_structure is None:
@@ -266,8 +266,8 @@ class ConditionalLogBilinear(torch.nn.Module):
             self.c_encoder = ff.FeedForward(
                 c_encoder_structure,
                 activation=ACTIVATIONS[activation],
-                dropout=dropout,
-                device=device
+                device=device,
+                **kwds
             )
             L = c_encoder_structure[-1]
         self.bilinear = torch.nn.Bilinear(K, L, 1, bias=False, device=device)
@@ -545,6 +545,8 @@ def main(vectors_filename,
             psi_structure=DEFAULT_STRUCTURE,
             activation=DEFAULT_ACTIVATION,
             dropout=DEFAULT_DROPOUT,
+            batch_norm=False,
+            layer_norm=False,
             **kwds):
     if seed is not None:
         random.seed(seed)
@@ -579,6 +581,8 @@ def main(vectors_filename,
             vectors,
             activation=activation,
             dropout=dropout,
+            batch_norm=batch_norm,
+            layer_norm=layer_norm,
             support=vocab_words,
         )
     elif G == 2:
@@ -589,6 +593,8 @@ def main(vectors_filename,
                 support=vocab_words,
                 activation=activation,
                 dropout=dropout,
+                batch_norm=batch_norm,
+                layer_norm=layer_norm,
             )
         else:
             model = ConditionalLogBilinear(
@@ -597,6 +603,8 @@ def main(vectors_filename,
                 vectors,
                 activation=activation,
                 dropout=dropout,
+                batch_norm=batch_norm,
+                layer_norm=layer_norm,
                 support=vocab_words,
             )
     else:
@@ -606,6 +614,7 @@ def main(vectors_filename,
     model, diagnostics = train(model, train_data, dev_data=dev_data, test_data=test_data, w_vocab=vocab_words, c_vocab=vectors.word_indices, **kwds)
     if output_filename is not None:
         torch.save(model, output_filename)
+        
     return model
 
 if __name__ == '__main__':
@@ -633,8 +642,8 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=None, help="Random seed for minibatches.")
     parser.add_argument("--finetune", action="store_true", help="Finetune word vectors.")
     parser.add_argument('--weight_decay', type=float, default=0, help='Weight decay.')
+    parser.add_argument('--batch_norm', action='store_true', help="Apply batch normalization.")
+    parser.add_argument('--layer_norm', action='store_true', help="Apply layer normalization.")    
     args = parser.parse_args()
-    main(args.vectors, args.train, dev_filename=args.dev, test_filename=args.test, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size, include_unk=args.include_unk, finetune=args.finetune, weight_decay=args.weight_decay, data_on_device=args.data_on_device)
-
-    
-
+    main(args.vectors, args.train, dev_filename=args.dev, test_filename=args.test, phi_structure=args.structure, psi_structure=args.structure, activation=args.activation, dropout=args.dropout, check_every=args.check_every, patience=args.patience, tie_params=args.tie_params, vocab=args.vocab, num_iter=args.num_iter, softmax=args.softmax, output_filename=args.output_filename, no_encoders=args.no_encoders, seed=args.seed, batch_size=args.batch_size, include_unk=args.include_unk, finetune=args.finetune, weight_decay=args.weight_decay, batch_norm=args.batch_norm, layer_norm=args.layer_norm, data_on_device=args.data_on_device)
+    sys.exit(0)

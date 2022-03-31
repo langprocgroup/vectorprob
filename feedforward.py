@@ -31,7 +31,7 @@ class FeedForward(torch.nn.Module):
     ReLU ->
     2 outputs 
     """
-    def __init__(self, structure, dropout=0, activation=torch.nn.ReLU(), transform=None, device=None):
+    def __init__(self, structure, activation=torch.nn.ReLU(), dropout=0, batch_norm=False, layer_norm=False, transform=None, device=None):
         super().__init__()
         self.device = device
         
@@ -40,7 +40,12 @@ class FeedForward(torch.nn.Module):
             assert len(the_structure) >= 2
             for a, b in pairs(the_structure[:-1]):
                 yield initialized_linear(a, b, device=self.device)
-                yield torch.nn.Dropout(dropout)
+                if dropout:
+                    yield torch.nn.Dropout(dropout)
+                if layer_norm:
+                    yield torch.nn.LayerNorm(b, device=self.device)
+                if batch_norm:
+                    yield torch.nn.BatchNorm1d(b, device=self.device)
                 yield activation
             *_, penultimate, last = the_structure
             yield initialized_linear(penultimate, last, device=self.device)
