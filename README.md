@@ -53,9 +53,9 @@ Suppose you have word vectors in word2vec format in a file `vectors.vec`, and a 
 
 Then you can train the model with a command such as:
 ```
-python bilinear.py vectors.vec train_counts.csv --dev_counts.csv --vocab vocab.txt --num_iter 5000 --batch_size 512 --structure "[300, 400, 400]" --data_on_device --layer_norm --output_filename model.pt
+python bilinear.py vectors.vec train_counts.csv --output_filename model.pt --dev dev_counts.csv --vocab vocab.txt --num_iter 5000 --batch_size 512 --structure "[300, 400, 400]" --data_on_device --layer_norm 
 ```
-This will train the model and save it as `model.pt`. The script will output statistics including train set and dev set loss. The most important number to watch is the dev set loss; the model is most accurate when this is lowest.
+This will train the model and save it as `model.pt`. The model is trained for 5000 steps of gradient descent with batch size 512; the word and context encoders have structure `"[300, 400, 400]"` meaning the input has 300 dimensions, there is a hidden layer of 400 dimensions, and the final output has 400 dimensions; layer normalization is applied through the option `--layer_norm`. The script will output statistics including train set and dev set loss. The most important number to watch is the dev set loss; the model is most accurate when this is lowest.
 
 Once the model is trained, if you have a set of pairs you want to get probabilities for in csv format (say `test.csv`), you can run the model as so:
 ```
