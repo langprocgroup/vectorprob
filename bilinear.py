@@ -27,7 +27,7 @@ DEFAULT_ACTIVATION = "relu"
 DEFAULT_CHECK_EVERY = 100
 DEFAULT_PATIENCE = None
 DEFAULT_DROPOUT = 0.0
-DEFAULT_FILENAME = None#"output/model_%s.pt" % str(datetime.datetime.now()).split(".")[0].replace(" ", "_")
+DEFAULT_FILENAME = "output/model_%s.pt" % str(datetime.datetime.now()).split(".")[0].replace(" ", "_")
 EPSILON = 10 ** -7
 
 ACTIVATIONS = {
