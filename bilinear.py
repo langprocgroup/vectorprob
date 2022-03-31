@@ -619,7 +619,7 @@ def main(vectors_filename,
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Model joint word probabilities using a log-bilinear model')
+    parser = argparse.ArgumentParser(description='Estimate conditional word probabilities using a log-bilinear model')
     parser.add_argument("vectors", type=str, help="Path to word vectors in word2vec format")
     parser.add_argument("train", type=str, help="Path to file containing training counts of word pairs")
     parser.add_argument("--dev", type=str, default=None, help="Path to file containing dev counts of word pairs")

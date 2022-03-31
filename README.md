@@ -1,6 +1,8 @@
-## vectorprob: Estimating conditional word probabilities from pretrained static word vectors
+# vectorprob: Estimating conditional word probabilities from pretrained static word vectors
 
 Suppose we want to know the distribution p(w | c) where w and c are both single words, in some certain relationship. This software uses pretrained static word embeddings to estimate such distributions.
+
+The Python script `bilinear.py` will train the probability model based on example counts of (w,c) pairs, saving a model in `.pt` format. Then the script `run_model.py` will apply the model to get conditional probabilities for a new set of (w,c) pairs.
 
 ```
 usage: bilinear.py [-h] [--dev DEV] [--test TEST] [--vocab VOCAB] [--tie_params] [--softmax] [--num_iter NUM_ITER] [--batch_size BATCH_SIZE] [--lr LR] [--activation ACTIVATION] [--structure STRUCTURE] [--no_encoders] [--dropout DROPOUT] [--check_every CHECK_EVERY] [--patience PATIENCE] [--output_filename OUTPUT_FILENAME] [--include_unk] [--data_on_device]
@@ -45,7 +47,18 @@ optional arguments:
   --layer_norm          Apply layer normalization.
   ```
 
+## Example
 
+Suppose you have word vectors in word2vec format in a file `vectors.vec`, and a file of counts of word pairs in csv format at `train_counts.csv`. This file should be formatted such that the first column is the target word, the second column is the context word, and the third column is the count. You might also want to use a second file of counts, called `dev_counts.csv`, which will be used to evaluate training progress; and a file `vocab.txt` which contains a list of words (one per line) serving as the target word vocabulary (the support of the distribution p(w|c)). 
 
+Then you can train the model with a command such as:
+```
+python bilinear.py vectors.vec train_counts.csv --dev_counts.csv --vocab vocab.txt --num_iter 5000 --batch_size 512 --structure "[300, 400, 400]" --data_on_device --layer_norm --output_filename model.pt
+```
+This will train the model and save it as `model.pt`. The script will output statistics including train set and dev set loss. The most important number to watch is the dev set loss; the model is most accurate when this is lowest.
 
-
+Once the model is trained, if you have a set of pairs you want to get probabilities for in csv format (say `test.csv`), you can run the model as so:
+```
+python run_model.py model.pt test.csv
+```
+This will output the log probabilities for the target words to `stdout` in csv format.
