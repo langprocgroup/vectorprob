@@ -558,6 +558,7 @@ def main(vectors_filename,
     else:
         vocab_words = vectors.word_indices
     print("Support size = %d + 1" % (len(vocab_words) - 1), file=sys.stderr)
+
     train_data = rw.read_counts(train_filename, verbose=True)
     train_data = unkify(train_data, vocab_words, vectors.word_indices)
     if dev_filename:
@@ -599,7 +600,7 @@ def main(vectors_filename,
         else:
             model = ConditionalLogBilinear(
                 eval(phi_structure) if not no_encoders else None,
-                None if tie_params else eval(psi_structure),
+                None if tie_params else (eval(psi_structure) if not no_encoders else None)
                 vectors,
                 activation=activation,
                 dropout=dropout,
