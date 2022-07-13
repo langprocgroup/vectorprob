@@ -600,7 +600,7 @@ def main(vectors_filename,
         else:
             model = ConditionalLogBilinear(
                 eval(phi_structure) if not no_encoders else None,
-                None if tie_params else (eval(psi_structure) if not no_encoders else None)
+                None if tie_params else (eval(psi_structure) if not no_encoders else None),
                 vectors,
                 activation=activation,
                 dropout=dropout,
