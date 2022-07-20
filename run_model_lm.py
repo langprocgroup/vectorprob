@@ -8,6 +8,7 @@ from bilinear import WordVectors, MarginalLogLinear, ConditionalSoftmax, Conditi
 
 def main(model_filename, data_filename):
     model = torch.load(model_filename)
+    writer = csv.writer(sys.stdout)    
     with open(data_filename) as infile:
         for form in infile:
             word = ['#'] + form.strip().split() + ['#']
